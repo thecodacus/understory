@@ -48,9 +48,12 @@ function normalizeV1(baseURL: string): string {
 }
 
 // llama-server (or llama-swap in front of it) exposes GET /v1/models.
-// Cache discovery per base URL — the loaded model doesn't change mid-session,
-// and we don't want a discovery round-trip on every agent step.
-const discoveryCache = new Map<string, Promise<string>>();
+// Cache discovery per base URL for a short TTL — avoids a discovery
+// round-trip on every single agent turn, while still noticing within a
+// session that the user swapped which model llama-swap has loaded (a
+// process-lifetime cache would never see that again without a restart).
+const DISCOVERY_TTL_MS = 60_000;
+const discoveryCache = new Map<string, { promise: Promise<string>; expiresAt: number }>();
 
 /**
  * Pick a model id from llama-server's /v1/models. Prefers a model llama-swap
@@ -59,28 +62,29 @@ const discoveryCache = new Map<string, Promise<string>>();
  */
 export async function discoverLlamaCppModel(baseURL: string): Promise<string> {
   const url = normalizeV1(baseURL);
-  let cached = discoveryCache.get(url);
-  if (!cached) {
-    cached = (async () => {
-      const res = await fetch(`${url}/models`);
-      if (!res.ok) {
-        throw new Error(`llama-server model discovery failed: ${res.status} at ${url}/models`);
-      }
-      const body = (await res.json()) as {
-        data?: { id: string; status?: { value?: string } }[];
-      };
-      const models = body.data ?? [];
-      if (models.length === 0) {
-        throw new Error(`llama-server at ${url} lists no models`);
-      }
-      const loaded = models.find((m) => m.status?.value === "loaded");
-      return (loaded ?? models[0]).id;
-    })();
-    discoveryCache.set(url, cached);
-    // Don't cache failures — the server may just be starting up.
-    cached.catch(() => discoveryCache.delete(url));
+  const cached = discoveryCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.promise;
   }
-  return cached;
+  const promise = (async () => {
+    const res = await fetch(`${url}/models`);
+    if (!res.ok) {
+      throw new Error(`llama-server model discovery failed: ${res.status} at ${url}/models`);
+    }
+    const body = (await res.json()) as {
+      data?: { id: string; status?: { value?: string } }[];
+    };
+    const models = body.data ?? [];
+    if (models.length === 0) {
+      throw new Error(`llama-server at ${url} lists no models`);
+    }
+    const loaded = models.find((m) => m.status?.value === "loaded");
+    return (loaded ?? models[0]).id;
+  })();
+  discoveryCache.set(url, { promise, expiresAt: Date.now() + DISCOVERY_TTL_MS });
+  // Don't cache failures — the server may just be starting up.
+  promise.catch(() => discoveryCache.delete(url));
+  return promise;
 }
 
 export async function resolveModel(
