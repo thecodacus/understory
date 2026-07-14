@@ -61,13 +61,15 @@ export function isRetryableError(err: unknown): boolean {
   if (typeof err === "number") return isRetryableStatusCode(err);
   if (isAbortError(err)) return false;
 
+  // AI SDK wraps transport failures in RetryError with isRetryable: true.
+  if (getIsRetryable(err)) return true;
+
   const statusCode = getStatusCode(err);
   if (statusCode != null) return isRetryableStatusCode(statusCode);
 
-  const code = getErrorCode(err);
-  if (code && ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND"].includes(code)) {
-    return true;
-  }
+  // Walk the error and its cause chain for transport codes.
+  const code = getDeepErrorCode(err);
+  if (code && isTransportCode(code)) return true;
 
   // Node/undici fetch failures commonly surface as TypeError.
   if (err instanceof TypeError) return true;
@@ -93,6 +95,31 @@ function getErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") return undefined;
   const value = (err as { code?: unknown }).code;
   return typeof value === "string" ? value : undefined;
+}
+
+function getIsRetryable(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  return (err as { isRetryable?: unknown }).isRetryable === true;
+}
+
+/** Walk the error and its cause chain for the first transport-level code. */
+function getDeepErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const code = getErrorCode(err);
+  if (code) return code;
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && typeof cause === "object") return getDeepErrorCode(cause);
+  return undefined;
+}
+
+/** Undici/Node transport error codes. */
+function isTransportCode(code: string): boolean {
+  const codes = [
+    "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND",
+    "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_SOCKET",
+  ];
+  return codes.includes(code);
 }
 
 function isAbortError(err: unknown): boolean {
