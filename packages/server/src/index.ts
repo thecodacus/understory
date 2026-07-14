@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
-import { KnowledgeBase } from "@understory/core";
+import { KnowledgeBase, resolveFallbackConfig, resolveModelConfig } from "@understory/core";
 import { mcpRouter } from "./mcp/http.js";
 import { browseRouter } from "./api/browse.js";
 import { chatRouter } from "./api/chat.js";
@@ -20,6 +20,24 @@ const kb = new KnowledgeBase(bundleRoot, {
 });
 
 const app = express();
+
+// Validate LLM config at startup — fail fast with a clear error.
+try {
+  const primaryConfig = resolveModelConfig();
+  console.log(
+    `[understory] model: ${primaryConfig.format}:${primaryConfig.model || "auto"} @ ${primaryConfig.baseURL}`
+  );
+  const fallbackConfig = resolveFallbackConfig();
+  if (fallbackConfig) {
+    console.log(
+      `[understory] fallback: ${fallbackConfig.format}:${fallbackConfig.model || "auto"} @ ${fallbackConfig.baseURL}`
+    );
+  }
+} catch (err) {
+  console.error(`[understory] LLM configuration error: ${(err as Error).message}`);
+  console.error("[understory] Set LLM_API_BASE_URL + LLM_API_KEY, or configure legacy env vars.");
+  process.exit(1);
+}
 
 // Reflect the request origin; expose Mcp-Session-Id so browser MCP clients can
 // read it back off the initialize response.

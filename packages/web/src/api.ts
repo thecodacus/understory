@@ -72,9 +72,9 @@ export interface QueryTrace extends TraceSummary {
 }
 
 export interface AppConfig {
-  providers: string[];
-  defaultProvider: string;
-  defaultModel: string;
+  model: string;
+  format: "openai" | "anthropic" | string;
+  fallbackConfigured: boolean;
 }
 
 const TOKEN_KEY = "understory-token";

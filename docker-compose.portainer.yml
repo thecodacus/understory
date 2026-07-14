@@ -13,15 +13,25 @@ services:
     environment:
       BUNDLE_ROOT: /bundle
       AUTH_TOKEN: ${AUTH_TOKEN:-}
-      # anthropic | openrouter | llamacpp | local
-      LLM_PROVIDER: ${LLM_PROVIDER:-llamacpp}
+      # Primary model
+      LLM_API_BASE_URL: ${LLM_API_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_API_FORMAT: ${LLM_API_FORMAT:-openai}
       LLM_MODEL: ${LLM_MODEL:-}
+      # Fallback model
+      LLM_FALLBACK_API_BASE_URL: ${LLM_FALLBACK_API_BASE_URL:-}
+      LLM_FALLBACK_API_KEY: ${LLM_FALLBACK_API_KEY:-}
+      LLM_FALLBACK_API_FORMAT: ${LLM_FALLBACK_API_FORMAT:-openai}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
+      LLM_FALLBACK_ALLOW_FOR: ${LLM_FALLBACK_ALLOW_FOR:-query}
+      # Legacy compat (still supported)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      # Homelab llama-server / llama-swap (model auto-discovered):
-      LLAMACPP_BASE_URL: ${LLAMACPP_BASE_URL:-http://192.168.1.101:8080}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      LLAMACPP_BASE_URL: ${LLAMACPP_BASE_URL:-}
       LLAMACPP_API_KEY: ${LLAMACPP_API_KEY:-}
       LOCAL_BASE_URL: ${LOCAL_BASE_URL:-}
+      LOCAL_API_KEY: ${LOCAL_API_KEY:-}
       GIT_AUTOCOMMIT: ${GIT_AUTOCOMMIT:-false}
     restart: unless-stopped
 

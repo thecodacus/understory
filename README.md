@@ -31,16 +31,15 @@ services:
       - understory-memory:/bundle
     environment:
       BUNDLE_ROOT: /bundle
-      # Pick ONE provider:
-      # 1) Local llama.cpp / llama-swap (model auto-discovered; start llama-server with --jinja)
-      LLM_PROVIDER: llamacpp
-      LLAMACPP_BASE_URL: http://your-inference-box:8080
-      # 2) Anthropic
-      #LLM_PROVIDER: anthropic
-      #ANTHROPIC_API_KEY: sk-ant-...
-      # 3) OpenRouter
-      #LLM_PROVIDER: openrouter
-      #OPENROUTER_API_KEY: sk-or-...
+      LLM_API_BASE_URL: ${LLM_API_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_API_FORMAT: openai
+      LLM_MODEL: ${LLM_MODEL:-}
+      # Optional fallback
+      LLM_FALLBACK_API_BASE_URL: ${LLM_FALLBACK_API_BASE_URL:-}
+      LLM_FALLBACK_API_KEY: ${LLM_FALLBACK_API_KEY:-}
+      LLM_FALLBACK_API_FORMAT: ${LLM_FALLBACK_API_FORMAT:-openai}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
     restart: unless-stopped
 
 volumes:
@@ -50,6 +49,44 @@ volumes:
 ```bash
 docker compose up -d
 ```
+
+### Choosing a provider
+
+The generic provider system supports any OpenAI-compatible or Anthropic-compatible API.
+Set `LLM_API_BASE_URL` + `LLM_API_KEY` + `LLM_MODEL` and leave `LLM_PROVIDER` unset.
+
+**DeepSeek:**
+```bash
+LLM_API_BASE_URL=https://api.deepseek.com/v1 LLM_API_KEY=sk-... LLM_MODEL=deepseek-chat
+```
+
+**OpenAI:**
+```bash
+LLM_API_BASE_URL=https://api.openai.com/v1 LLM_API_KEY=sk-... LLM_MODEL=gpt-4o
+```
+
+**Anthropic (Claude):**
+```bash
+LLM_API_BASE_URL=https://api.anthropic.com/v1 LLM_API_KEY=sk-ant-... LLM_API_FORMAT=anthropic LLM_MODEL=claude-sonnet-5
+```
+
+**Groq:**
+```bash
+LLM_API_BASE_URL=https://api.groq.com/openai/v1 LLM_API_KEY=gsk_... LLM_MODEL=llama-3.3-70b-versatile
+```
+
+**Local llama.cpp:**
+```bash
+LLM_API_BASE_URL=http://localhost:8080/v1 LLM_MODEL=
+```
+
+**Local llama.cpp with DeepSeek fallback:**
+```bash
+LLM_API_BASE_URL=http://localhost:8080/v1 LLM_MODEL= \
+LLM_FALLBACK_API_BASE_URL=https://api.deepseek.com/v1 LLM_FALLBACK_API_KEY=sk-... LLM_FALLBACK_MODEL=deepseek-chat
+```
+
+The old `LLM_PROVIDER` + per-provider key env vars still work (backward-compatible) but are deprecated.
 
 Then:
 
@@ -72,7 +109,7 @@ pnpm monorepo:
 | `packages/server` | Express: MCP streamable-HTTP at `/mcp`, stdio bin, REST browse API at `/api/*`, streaming chat at `/api/chat`, serves the web build |
 | `packages/web` | Vite + React + TS + Tailwind: bundle browser + agent chat (`useChat`) |
 
-Providers (env-selected, swappable per chat): **Anthropic** (default), **OpenRouter**, **llamacpp** (llama.cpp `llama-server` / llama-swap — model auto-discovered from `/v1/models`, loaded model preferred), **local** (any other OpenAI-compatible endpoint).
+Providers are configured through `LLM_API_BASE_URL`, `LLM_API_KEY`, `LLM_API_FORMAT` (`openai` or `anthropic`), and `LLM_MODEL`. Any OpenAI-compatible endpoint (DeepSeek, OpenAI, Groq, OpenRouter, llama.cpp, etc.) works with `LLM_API_FORMAT=openai`; Anthropic-compatible endpoints use `LLM_API_FORMAT=anthropic`. Optional fallback uses the matching `LLM_FALLBACK_*` variables.
 
 ### llama.cpp
 
@@ -80,8 +117,8 @@ Providers (env-selected, swappable per chat): **Anthropic** (default), **OpenRou
 # on the inference box — --jinja enables OpenAI-style tool calling
 llama-server -m model.gguf --jinja --host 0.0.0.0 --port 8080
 
-# here — no model id needed, it's discovered
-LLM_PROVIDER=llamacpp LLAMACPP_BASE_URL=http://inference-box:8080 \
+# here — no model id needed, it's discovered for llama-server-like local endpoints
+LLM_API_BASE_URL=http://inference-box:8080/v1 LLM_API_FORMAT=openai LLM_MODEL= \
 BUNDLE_ROOT=./sample-bundle node packages/server/dist/index.js
 ```
 
@@ -94,7 +131,12 @@ pnpm install
 pnpm build
 cp .env.example .env   # add your API key
 
-BUNDLE_ROOT=./sample-bundle ANTHROPIC_API_KEY=sk-... node packages/server/dist/index.js
+BUNDLE_ROOT=./sample-bundle \
+LLM_API_BASE_URL=https://api.deepseek.com/v1 \
+LLM_API_KEY=sk-... \
+LLM_API_FORMAT=openai \
+LLM_MODEL=deepseek-chat \
+node packages/server/dist/index.js
 # → http://localhost:3800  (web UI + /api + /mcp)
 ```
 
@@ -112,7 +154,10 @@ pnpm --filter @understory/web dev
 ```bash
 claude mcp add ustory \
   -e BUNDLE_ROOT=/path/to/your/bundle \
-  -e ANTHROPIC_API_KEY=sk-... \
+  -e LLM_API_BASE_URL=https://api.deepseek.com/v1 \
+  -e LLM_API_KEY=sk-... \
+  -e LLM_API_FORMAT=openai \
+  -e LLM_MODEL=deepseek-chat \
   -- node /path/to/understory/packages/server/dist/mcp/stdio.js
 ```
 
