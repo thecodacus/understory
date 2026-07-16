@@ -154,7 +154,7 @@ const discoveryCache = new Map<string, { promise: Promise<string>; expiresAt: nu
  * the first listed. Results are cached per URL with a 60s TTL so model
  * swaps are noticed within a session.
  */
-async function discoverLlamaCppModel(baseURL: string): Promise<string> {
+export async function discoverLlamaCppModel(baseURL: string): Promise<string> {
   const url = normalizeV1(baseURL);
   const cached = discoveryCache.get(url);
   if (cached && cached.expiresAt > Date.now()) {
