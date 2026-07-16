@@ -12,6 +12,7 @@ services:
       - okf-bundle:/bundle
     environment:
       BUNDLE_ROOT: /bundle
+      AUTH_TOKEN: ${AUTH_TOKEN:-}
       # anthropic | openrouter | llamacpp | local
       LLM_PROVIDER: ${LLM_PROVIDER:-llamacpp}
       LLM_MODEL: ${LLM_MODEL:-}

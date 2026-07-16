@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type AppConfig, type Concept, type ConformanceReport, type LogEntry, type SearchHit, type TreeNode } from "./api";
+import { api, ApiError, setAuthToken, type AppConfig, type Concept, type ConformanceReport, type LogEntry, type SearchHit, type TreeNode } from "./api";
 import { Tree } from "./components/Tree";
 import { ConceptView } from "./components/ConceptView";
 import { LogView } from "./components/LogView";
@@ -23,9 +23,20 @@ export default function App() {
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [chatOpen, setChatOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [needsToken, setNeedsToken] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
 
   const refresh = useCallback(() => {
-    api.tree().then(setTree).catch((e) => setError(String(e)));
+    api
+      .tree()
+      .then((t) => {
+        setTree(t);
+        setNeedsToken(false);
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 401) setNeedsToken(true);
+        else setError(String(e));
+      });
     api.validate().then(setReport).catch(() => {});
     api.log().then(setLog).catch(() => {});
   }, []);
@@ -67,6 +78,42 @@ export default function App() {
     setError(null);
     setQuery("");
   }, []);
+
+  if (needsToken) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setAuthToken(tokenInput.trim());
+            setTokenInput("");
+            refresh();
+            api.config().then(setConfig).catch(() => {});
+          }}
+          className="w-80 rounded-xl border border-zinc-800 bg-zinc-900/60 p-5"
+        >
+          <h1 className="text-sm font-bold tracking-wide text-cyan-300">understory 🌱</h1>
+          <p className="mt-2 text-sm text-zinc-400">
+            This server requires an access token (its <code className="text-zinc-300">AUTH_TOKEN</code>).
+          </p>
+          <input
+            type="password"
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+            placeholder="Access token"
+            autoFocus
+            className="mt-3 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-cyan-600"
+          />
+          <button
+            type="submit"
+            className="mt-3 w-full rounded-lg bg-cyan-700 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-600"
+          >
+            Unlock
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen">

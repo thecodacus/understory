@@ -7,6 +7,7 @@ import { KnowledgeBase } from "@understory/core";
 import { mcpRouter } from "./mcp/http.js";
 import { browseRouter } from "./api/browse.js";
 import { chatRouter } from "./api/chat.js";
+import { bearerAuth } from "./auth.js";
 
 const bundleRoot = process.env.BUNDLE_ROOT;
 if (!bundleRoot) {
@@ -38,6 +39,16 @@ app.use(
   })
 );
 app.use(express.json({ limit: "4mb" }));
+
+// Optional bearer auth (issue #1): protects the memory (/mcp + /api) when
+// AUTH_TOKEN is set. Static web UI stays open and prompts for the token.
+const authToken = process.env.AUTH_TOKEN;
+if (authToken) {
+  app.use(["/mcp", "/api"], bearerAuth(authToken));
+  console.log("[understory] auth: bearer token required for /mcp and /api");
+} else {
+  console.log("[understory] auth: disabled (set AUTH_TOKEN to protect /mcp and /api)");
+}
 
 app.use("/mcp", mcpRouter(kb));
 app.use("/api", browseRouter(kb));

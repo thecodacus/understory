@@ -77,9 +77,33 @@ export interface AppConfig {
   defaultModel: string;
 }
 
+const TOKEN_KEY = "understory-token";
+
+export function getAuthToken(): string {
+  return localStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+export function setAuthToken(token: string): void {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+/** Headers for API calls — includes the bearer token when one is stored. */
+export function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  const res = await fetch(url, { headers: authHeaders() });
+  if (!res.ok) throw new ApiError(res.status, `${res.status} ${await res.text()}`);
   return res.json();
 }
 

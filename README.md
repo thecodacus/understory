@@ -118,6 +118,23 @@ claude mcp add ustory \
 
 Or point an HTTP MCP client at `http://host:3800/mcp`.
 
+### Auth
+
+By default the server is open — fine on localhost or a trusted LAN. Before exposing it anywhere else, set `AUTH_TOKEN`:
+
+```bash
+AUTH_TOKEN=$(openssl rand -hex 24)
+```
+
+With it set, `/mcp` and `/api` require `Authorization: Bearer <token>` (the web UI stays reachable and prompts for the token). Register authenticated MCP clients with a header:
+
+```bash
+claude mcp add --transport http ustory http://host:3800/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+The stdio transport needs no token — it's a local process spawned by the client.
+
 ### Seed memory
 
 A client LLM that only sees four bare tool names never gets the instinct to check memory. So at **session start** the server injects a compact overview of what the knowledge base contains (directories, concepts with types + descriptions, recent activity) through both channels that reach the model:
