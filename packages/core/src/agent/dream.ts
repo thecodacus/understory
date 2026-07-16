@@ -29,7 +29,12 @@ export async function runDream(
   // Injectable for tests.
   runner: typeof runMutation = runMutation
 ): Promise<DreamReport> {
-  const [lint, graph, log] = await Promise.all([kb.lint(), kb.graph(), kb.readLog()]);
+  const [lint, graph, log, fat] = await Promise.all([
+    kb.lint(),
+    kb.graph(),
+    kb.readLog(),
+    oversizedConcepts(kb),
+  ]);
   const dupes = duplicateCandidates(graph.nodes);
   const insightsEnabled = process.env.DREAM_INSIGHTS !== "false";
 
@@ -55,6 +60,17 @@ export async function runDream(
         `linked to the removed one, and delete the duplicate (deletion IS authorized for true ` +
         `duplicates after merging). If they are genuinely distinct, cross-link them instead:\n` +
         dupes.map((d) => `- ${d.a} ↔ ${d.b}`).join("\n")
+    );
+  }
+  if (fat.length > 0) {
+    signals.push(
+      `OVERSIZED CONCEPTS (grown too large through repeated enrichment). For each: if the ` +
+        `body contains genuinely separable topics, extract each into its OWN concept (proper ` +
+        `type/title/description, back-linked per the rules), then rewrite the ORIGINAL file ` +
+        `as a hub — a short summary that links to every extracted concept. NEVER delete or ` +
+        `rename the original path; other concepts link to it. If the content is one ` +
+        `indivisible topic, leave it alone:\n` +
+        fat.map((f) => `- ${f.path} (${f.chars} chars, ${f.sections} sections)`).join("\n")
     );
   }
   if (insightsEnabled && log.length >= 5) {
@@ -102,6 +118,39 @@ function normalizeMutation(result: unknown): { summary: string; filesChanged: st
   // MutationResult shape.
   const m = r as { summary?: string; filesChanged?: string[] };
   return { summary: m.summary ?? "", filesChanged: m.filesChanged ?? [] };
+}
+
+export interface OversizedConcept {
+  path: string;
+  chars: number;
+  sections: number;
+}
+
+const SPLIT_CHARS = 6000;
+const SPLIT_SECTIONS = 6;
+const MAX_SPLITS_PER_DREAM = 3;
+
+/**
+ * Deterministic bloat detection — the counterpart of duplicate detection.
+ * Enrich-over-create makes concepts grow forever; flag ones whose body is
+ * very long or has sprouted many top-level sections, so the dream can split
+ * them hub-and-spoke (original path preserved, so inbound links never break).
+ */
+export async function oversizedConcepts(kb: KnowledgeBase): Promise<OversizedConcept[]> {
+  const paths = await kb.bundle.listConceptPaths();
+  const out: OversizedConcept[] = [];
+  for (const p of paths) {
+    try {
+      const c = await kb.readConcept(p);
+      const sections = (c.body.match(/^#\s+/gm) ?? []).length;
+      if (c.body.length >= SPLIT_CHARS || sections >= SPLIT_SECTIONS) {
+        out.push({ path: p, chars: c.body.length, sections });
+      }
+    } catch {
+      // Permissive: unreadable concepts are lint's problem, not the dream's.
+    }
+  }
+  return out.sort((a, b) => b.chars - a.chars).slice(0, MAX_SPLITS_PER_DREAM);
 }
 
 /**

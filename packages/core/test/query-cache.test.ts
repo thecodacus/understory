@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { KnowledgeBase } from "../src/okf/index.js";
 import { bundleFingerprint, clearQueryCache, runQueryCached } from "../src/agent/query-cache.js";
+import { clearHotMemory } from "../src/agent/hot-memory.js";
 import { parseDuration } from "../src/util/duration.js";
 import type { QueryResult } from "../src/agent/agent.js";
 
@@ -20,6 +21,8 @@ beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "ustory-cache-"));
   kb = new KnowledgeBase(root);
   clearQueryCache();
+  clearHotMemory();
+  process.env.HOT_MEMORY = "false";
   await kb.writeConcept("/facts/a.md", { type: "Fact", title: "A" }, "alpha", "add");
 });
 
@@ -27,6 +30,7 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
   delete process.env.QUERY_CACHE;
   delete process.env.QUERY_CACHE_TTL;
+  delete process.env.HOT_MEMORY;
 });
 
 describe("runQueryCached", () => {

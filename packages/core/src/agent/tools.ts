@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { KnowledgeBase } from "../okf/index.js";
 import type { TreeNode } from "../okf/types.js";
 import type { TraceRecorder } from "./trace.js";
+import { recordHotDelete, recordHotWrite } from "./hot-memory.js";
 
 /** Bundle-relative concept path, e.g. "/tables/customers.md". */
 const conceptPath = z
@@ -95,6 +96,7 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
       execute: async ({ path, frontmatter, body, log_summary }) => {
         const c = await kb.writeConcept(path, frontmatter, body, log_summary);
         filesChanged.add(c.path);
+        recordHotWrite(c.path);
         trace?.record("write_concept", c.path, [c.path], true);
         return { written: c.path };
       },
@@ -136,6 +138,7 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
           log_summary
         );
         filesChanged.add(c.path);
+        recordHotWrite(c.path);
         trace?.record("patch_concept", c.path, [c.path], true);
         return { patched: c.path };
       },
@@ -150,6 +153,7 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
       execute: async ({ path, log_summary }) => {
         await kb.deleteConcept(path, log_summary);
         filesChanged.add(path);
+        recordHotDelete(path);
         trace?.record("delete_concept", path, [path], true);
         return { deleted: path };
       },

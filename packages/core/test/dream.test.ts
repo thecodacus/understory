@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { KnowledgeBase } from "../src/okf/index.js";
-import { duplicateCandidates, runDream } from "../src/agent/dream.js";
+import { duplicateCandidates, oversizedConcepts, runDream } from "../src/agent/dream.js";
 
 let root: string;
 let kb: KnowledgeBase;
@@ -61,5 +61,33 @@ describe("runDream", () => {
     expect(report.ran).toBe(true);
     expect(report.summary).toBe("done");
     expect(report.filesChanged).toEqual(["/only.md"]);
+  });
+});
+
+describe("oversizedConcepts", () => {
+  it("flags many-sectioned or very long bodies, not small concepts", async () => {
+    const fatBody = Array.from({ length: 7 }, (_, i) => `# Topic ${i}\n\ncontent for topic ${i}`).join("\n\n");
+    await kb.writeConcept("/people/fat.md", { type: "Person", title: "Fat Profile", description: "overgrown" }, fatBody, "add");
+    await kb.writeConcept("/facts/tiny.md", { type: "Fact", title: "Tiny", description: "small" }, "one line", "add");
+
+    const fat = await oversizedConcepts(kb);
+    expect(fat.map((f) => f.path)).toEqual(["/people/fat.md"]);
+    expect(fat[0].sections).toBeGreaterThanOrEqual(6);
+  });
+
+  it("feeds the split instruction into the dream (hub kept, path preserved)", async () => {
+    const fatBody = Array.from({ length: 7 }, (_, i) => `# Topic ${i}\n\ncontent ${i}`).join("\n\n");
+    await kb.writeConcept("/people/fat.md", { type: "Person", title: "Fat", description: "big" }, fatBody, "add");
+    // Link it both ways with a friend so no orphan/broken signals muddy the test.
+    await kb.patchConcept("/people/fat.md", { replaceSection: { heading: "Topic 0", content: "see [Friend](/facts/friend.md)" } }, "link");
+    await kb.writeConcept("/facts/friend.md", { type: "Fact", title: "Friend", description: "companion" }, "see [Fat](/people/fat.md)", "add");
+
+    const runner = vi.fn(async () => ({ summary: "split", filesChanged: ["/people/fat.md"], steps: 4, traceId: "t" }));
+    const report = await runDream(kb, {}, runner as never);
+    expect(report.ran).toBe(true);
+    const instruction = runner.mock.calls[0][1] as unknown as string;
+    expect(instruction).toContain("OVERSIZED CONCEPTS");
+    expect(instruction).toContain("/people/fat.md");
+    expect(instruction).toContain("NEVER delete or rename the original path");
   });
 });

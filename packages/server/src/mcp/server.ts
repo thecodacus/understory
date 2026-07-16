@@ -41,9 +41,10 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       inputSchema: { question: z.string().describe("The question to answer") },
     },
     async ({ question }) => {
-      const { answer, cached } = await runQueryCached(kb, question);
+      const { answer, source } = await runQueryCached(kb, question);
+      const marker = source === "cache" ? "\n\n(cached answer)" : source === "hot" ? "\n\n(hot memory)" : "";
       return {
-        content: [{ type: "text", text: cached ? `${answer}\n\n(cached answer)` : answer }],
+        content: [{ type: "text", text: `${answer}${marker}` }],
       };
     }
   );
