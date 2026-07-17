@@ -30,7 +30,11 @@ function parseFormat(value: string | undefined, fallback: ApiFormat, envName: st
   return format;
 }
 
+let legacyNoticed = false;
+
 function legacyNotice(): void {
+  if (legacyNoticed) return;
+  legacyNoticed = true;
   console.error(LEGACY_NOTICE);
 }
 

@@ -1,6 +1,6 @@
 services:
   understory:
-    image: ghcr.io/thecodacus/understory:latest
+    build: .
     ports:
       - "3800:3800"
     volumes:

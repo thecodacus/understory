@@ -81,6 +81,22 @@ describe("discoverLlamaCppModel", () => {
 // ── Generic provider config (PR #5) ────────────────────────────────
 
 describe("generic provider config", () => {
+  it("logs the legacy notice at most once per process", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // First call should log the deprecation notice.
+      resolveModelConfig(env({ LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "a" }));
+      // Second call (different legacy provider) should not log it again.
+      resolveModelConfig(env({ LLM_PROVIDER: "llamacpp", LLAMACPP_BASE_URL: "http://x:8080" }));
+      const legacyCalls = spy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("legacy env vars")
+      );
+      expect(legacyCalls).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("reads the primary and fallback slots from generic env vars", () => {
     expect(
       resolveModelConfig(
@@ -196,43 +212,97 @@ describe("fallback middleware", () => {
     await expect(withFallback(primary, fallback).doGenerate({} as never)).rejects.toMatchObject({ statusCode: 401 });
     expect(fallback.doGenerate).not.toHaveBeenCalled();
   });
+
+  it("preserves prototype getters like supportedUrls through the wrapper", () => {
+    const primary = fakeModel({
+      supportedUrls: { "image/*": [/.*/] },
+      provider: "test-provider",
+      modelId: "test-model-id",
+    });
+    const fallback = fakeModel();
+    const model = withFallback(primary, fallback);
+    expect(model.supportedUrls).toEqual({ "image/*": [/.*/] });
+    expect(model.provider).toBe("test-provider");
+    expect(model.modelId).toBe("test-model-id");
+    expect(model.specificationVersion).toBe("v2");
+  });
+
+  it("respects the retry429 option for fallback behavior", async () => {
+    // With retry429: false (default), a 429 should NOT trigger the fallback.
+    const primaryNoRetry = fakeModel({
+      doGenerate: vi.fn(async () => {
+        throw { statusCode: 429 };
+      }),
+    });
+    const fallbackNoRetry = fakeModel({ doGenerate: vi.fn() });
+    await expect(
+      withFallback(primaryNoRetry, fallbackNoRetry, { retry429: false }).doGenerate({} as never)
+    ).rejects.toMatchObject({ statusCode: 429 });
+    expect(fallbackNoRetry.doGenerate).not.toHaveBeenCalled();
+
+    // With retry429: true, a 429 SHOULD trigger the fallback.
+    const primaryYesRetry = fakeModel({
+      doGenerate: vi.fn(async () => {
+        throw { statusCode: 429 };
+      }),
+    });
+    const fallbackYesRetry = fakeModel({
+      doGenerate: vi.fn(async () => ({
+        content: [],
+        finishReason: "stop",
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        warnings: [],
+      })),
+    });
+    const result = await withFallback(primaryYesRetry, fallbackYesRetry, { retry429: true }).doGenerate(
+      {} as never
+    );
+    expect(result).toMatchObject({ finishReason: "stop" });
+    expect(fallbackYesRetry.doGenerate).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── isRetryableError (PR #5) ────────────────────────────────────────
 
 describe("isRetryableError", () => {
   it("uses a conservative positive allowlist", () => {
-    const prev = process.env.LLM_FALLBACK_RETRY_429;
-    process.env.LLM_FALLBACK_RETRY_429 = "false";
-    try {
-      expect(isRetryableError({ statusCode: 408 })).toBe(true);
-      expect(isRetryableError({ statusCode: 500 })).toBe(true);
-      expect(isRetryableError({ statusCode: 502 })).toBe(true);
-      expect(isRetryableError({ statusCode: 503 })).toBe(true);
-      expect(isRetryableError({ statusCode: 504 })).toBe(true);
-      expect(isRetryableError({ statusCode: 401 })).toBe(false);
-      expect(isRetryableError({ statusCode: 403 })).toBe(false);
-      expect(isRetryableError({ statusCode: 429 })).toBe(false);
-      expect(isRetryableError(Object.assign(new Error("reset"), { code: "ECONNRESET" }))).toBe(true);
-      expect(isRetryableError(Object.assign(new Error("abort"), { name: "AbortError" }))).toBe(false);
-      expect(isRetryableError(new Error("ordinary"))).toBe(false);
-    } finally {
-      if (prev === undefined) delete process.env.LLM_FALLBACK_RETRY_429;
-      else process.env.LLM_FALLBACK_RETRY_429 = prev;
-    }
+    expect(isRetryableError({ statusCode: 408 })).toBe(true);
+    expect(isRetryableError({ statusCode: 500 })).toBe(true);
+    expect(isRetryableError({ statusCode: 502 })).toBe(true);
+    expect(isRetryableError({ statusCode: 503 })).toBe(true);
+    expect(isRetryableError({ statusCode: 504 })).toBe(true);
+    expect(isRetryableError({ statusCode: 401 })).toBe(false);
+    expect(isRetryableError({ statusCode: 403 })).toBe(false);
+    expect(isRetryableError({ statusCode: 429 }, false)).toBe(false);
+    expect(isRetryableError(Object.assign(new Error("reset"), { code: "ECONNRESET" }))).toBe(true);
+    expect(isRetryableError(Object.assign(new Error("abort"), { name: "AbortError" }))).toBe(false);
+    expect(isRetryableError(new Error("ordinary"))).toBe(false);
   });
 
-  it("respects LLM_FALLBACK_RETRY_429", () => {
-    const prev = process.env.LLM_FALLBACK_RETRY_429;
-    try {
-      process.env.LLM_FALLBACK_RETRY_429 = "true";
-      expect(isRetryableError({ statusCode: 429 })).toBe(true);
-      process.env.LLM_FALLBACK_RETRY_429 = "false";
-      expect(isRetryableError({ statusCode: 429 })).toBe(false);
-    } finally {
-      if (prev === undefined) delete process.env.LLM_FALLBACK_RETRY_429;
-      else process.env.LLM_FALLBACK_RETRY_429 = prev;
-    }
+  it("respects the retry429 flag", () => {
+    expect(isRetryableError({ statusCode: 429 }, true)).toBe(true);
+    expect(isRetryableError({ statusCode: 429 }, false)).toBe(false);
+    expect(isRetryableError({ statusCode: 429 })).toBe(false); // default: unset → not retryable
+  });
+
+  it("checks the status code before the isRetryable flag", () => {
+    // 429 + isRetryable: true with retry429: false → NOT retryable (status code wins).
+    expect(isRetryableError({ statusCode: 429, isRetryable: true }, false)).toBe(false);
+    // 429 + isRetryable: true with retry429: true → IS retryable.
+    expect(isRetryableError({ statusCode: 429, isRetryable: true }, true)).toBe(true);
+    // 500 + isRetryable: false → IS retryable (500 always is, regardless of the flag).
+    expect(isRetryableError({ statusCode: 500, isRetryable: false })).toBe(true);
+    // 401 + isRetryable: true → NOT retryable (401 is never retryable).
+    expect(isRetryableError({ statusCode: 401, isRetryable: true })).toBe(false);
+    // isRetryable: true without a status code → IS retryable (AI SDK RetryError).
+    expect(isRetryableError({ isRetryable: true })).toBe(true);
+  });
+
+  it("only retries TypeError with a fetch-failed message", () => {
+    expect(isRetryableError(new TypeError("fetch failed"))).toBe(true);
+    expect(isRetryableError(new TypeError("some other bug"))).toBe(false);
+    expect(isRetryableError(new Error("fetch failed"))).toBe(false); // not a TypeError
+    expect(isRetryableError(new TypeError(""))).toBe(false); // empty message
   });
 
   it("recognizes AI SDK RetryError and nested undici transport errors", () => {

@@ -65,7 +65,9 @@ async function resolveAgentModel(
 
   const fallback = await createModel(fallbackConfig);
   return {
-    model: withFallback(primary, fallback),
+    model: withFallback(primary, fallback, {
+      retry429: env.LLM_FALLBACK_RETRY_429 === "true",
+    }),
     modelChain: [modelLabel(primaryConfig), modelLabel(fallbackConfig)],
   };
 }
@@ -79,8 +81,10 @@ function withModelOverride(config: ModelConfig, model: string | undefined): Mode
   return model ? { ...config, model } : config;
 }
 
+// No baseURL here by design: traces persist under <bundle>/.traces/, and a
+// published bundle would otherwise leak internal hostnames/IPs/ports.
 function modelLabel(config: ModelConfig): string {
-  return `${config.format}:${config.model || "auto"}@${config.baseURL}`;
+  return `${config.format}:${config.model || "auto"}`;
 }
 
 function traceStore(kb: KnowledgeBase): TraceStore {
