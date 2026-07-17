@@ -13,6 +13,8 @@ export interface TraceStep {
   write?: boolean;
 }
 
+export type TraceOutcome = "success" | "partial" | "failed";
+
 export interface QueryTrace {
   id: string;
   kind: "query" | "mutation" | "chat";
@@ -25,6 +27,8 @@ export interface QueryTrace {
   answer: string;
   /** Compact one-line notation of the traversal. */
   notation: string;
+  outcome: TraceOutcome;
+  modelChain: string[];
 }
 
 /** Collects steps during one agent run. Thread one instance through the tools. */
@@ -36,7 +40,13 @@ export class TraceRecorder {
     this.steps.push({ seq: this.steps.length + 1, tool, summary, paths, write });
   }
 
-  finalize(kind: QueryTrace["kind"], input: string, answer: string): QueryTrace {
+  finalize(
+    kind: QueryTrace["kind"],
+    input: string,
+    answer: string,
+    outcome: TraceOutcome = "success",
+    modelChain: string[] = []
+  ): QueryTrace {
     return {
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       kind,
@@ -45,14 +55,19 @@ export class TraceRecorder {
       durationMs: Date.now() - this.t0,
       steps: this.steps,
       answer: truncate(answer, 500),
-      notation: buildNotation(this.steps),
+      notation: buildNotation(this.steps, outcome),
+      outcome,
+      modelChain,
     };
   }
 }
 
 /** Compact single-line traversal notation, e.g.
  *  `search "rate limit" (2) → read /apis/billing-api.md → ✓` */
-export function buildNotation(steps: TraceStep[]): string {
+export function buildNotation(
+  steps: TraceStep[],
+  outcome: TraceOutcome = "success"
+): string {
   const parts = steps.map((s) => {
     switch (s.tool) {
       case "search_knowledge":
@@ -73,7 +88,18 @@ export function buildNotation(steps: TraceStep[]): string {
         return s.tool;
     }
   });
-  return [...parts, "✓"].join(" → ");
+  return [...parts, outcomeMarker(outcome)].join(" → ");
+}
+
+function outcomeMarker(outcome: TraceOutcome): string {
+  switch (outcome) {
+    case "success":
+      return "✓";
+    case "partial":
+      return "⚠ partial";
+    case "failed":
+      return "✗";
+  }
 }
 
 function shortPath(p: string): string {

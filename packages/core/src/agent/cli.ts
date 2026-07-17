@@ -25,7 +25,14 @@ if (mode === "query") {
   console.log(answer);
   console.error(`\n[${steps} steps]`);
 } else {
-  const { summary, filesChanged, steps } = await runMutation(kb, input);
-  console.log(summary);
-  console.error(`\n[${steps} steps] files changed: ${filesChanged.join(", ") || "none"}`);
+  const outcome = await runMutation(kb, input);
+  if (outcome.ok) {
+    console.log(outcome.result.summary);
+    console.error(
+      `\n[${outcome.result.steps} steps] files changed: ${outcome.result.filesChanged.join(", ") || "none"}`
+    );
+  } else {
+    console.error(`Mutation failed: ${outcome.error}`);
+    process.exit(1);
+  }
 }
