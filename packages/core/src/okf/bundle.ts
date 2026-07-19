@@ -250,9 +250,9 @@ export class Bundle {
 export function replaceSection(body: string, heading: string, content: string): string {
   const normalized = heading.replace(/^#+\s*/, "");
   const lines = body.split("\n");
-  const isHeading = (line: string) => /^#\s+/.test(line);
+  const isHeading = (line: string) => /^#+\s/.test(line);
   const start = lines.findIndex(
-    (line) => isHeading(line) && line.replace(/^#\s+/, "").trim() === normalized
+    (line) => isHeading(line) && line.replace(/^#+\s/, "").trim() === normalized
   );
   if (start === -1) {
     const suffix = body.trim().length > 0 ? "\n\n" : "";

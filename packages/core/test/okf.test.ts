@@ -142,6 +142,19 @@ describe("patch", () => {
     expect(patched.body).toContain("intro text");
   });
 
+  it("replaces a ## (H2) subsection without duplicating", () => {
+    const body = "# Journal\n\nintro\n\n## Life\n\nold entry\n\n## Dev\n\nkeep me";
+    const out = replaceSection(body, "Life", "new entry");
+    expect(out).toContain("## Life");
+    expect(out).toContain("new entry");
+    expect(out).not.toContain("old entry");
+    expect(out).toContain("keep me");
+    expect(out).toContain("# Journal");
+    expect(out).toContain("intro");
+    // Must not append a duplicate H1 section
+    expect(out).not.toMatch(/^# Life$/m);
+  });
+
   it("appends the section when the heading is absent", () => {
     const out = replaceSection("just a body", "Citations", "[1] [X](https://x.com)");
     expect(out).toContain("# Citations");
