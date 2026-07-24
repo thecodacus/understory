@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import ReactMarkdown from "react-markdown";
+import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import { authHeaders } from "../api";
 import type { AppConfig } from "../api";
 
@@ -70,7 +70,7 @@ export function ChatPanel({
                       m.role === "user" ? "bg-cyan-900/50" : "bg-zinc-900 border border-zinc-800"
                     }`}
                   >
-                    <ReactMarkdown>{part.text}</ReactMarkdown>
+                    <MarkdownRenderer>{part.text}</MarkdownRenderer>
                   </div>
                 );
               }

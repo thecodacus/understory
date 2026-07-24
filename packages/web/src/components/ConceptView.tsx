@@ -1,4 +1,4 @@
-import ReactMarkdown from "react-markdown";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import type { Concept } from "../api";
 
 /** Resolve a spec-§6 relative href (e.g. "billing-api.md", "tables/") against the doc's directory. */
@@ -76,35 +76,13 @@ export function ConceptView({
         </div>
       )}
 
-      <div className="markdown">
-        <ReactMarkdown
-          components={{
-            a: ({ href, children }) => {
-              const resolved = href ? resolveHref(href, concept.path) : null;
-              if (resolved) {
-                return (
-                  <a
-                    href={resolved}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onNavigate(resolved);
-                    }}
-                  >
-                    {children}
-                  </a>
-                );
-              }
-              return (
-                <a href={href} target="_blank" rel="noreferrer">
-                  {children}
-                </a>
-              );
-            },
-          }}
-        >
-          {concept.body}
-        </ReactMarkdown>
-      </div>
+      <MarkdownRenderer
+        className="markdown"
+        onNavigate={(href) => resolveHref(href, concept.path)}
+        onNavigateClick={onNavigate}
+      >
+        {concept.body}
+      </MarkdownRenderer>
     </div>
   );
 }

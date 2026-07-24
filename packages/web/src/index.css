@@ -15,4 +15,3 @@ body {
 .markdown pre code { @apply bg-transparent p-0 text-zinc-200; }
 .markdown a { @apply text-cyan-400 hover:underline; }
 .markdown table { @apply my-3 text-sm; }
-.markdown th, .markdown td { @apply border border-zinc-700 px-2 py-1; }
