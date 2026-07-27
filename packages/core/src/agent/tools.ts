@@ -85,6 +85,8 @@ export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder) {
 export interface WriteToolPolicy {
   /** If set, write_concept may create or overwrite only these canonical bundle paths. */
   allowedWritePaths?: readonly string[];
+  /** Paths which must be atomically created and must never overwrite an existing file. */
+  createOnlyPaths?: readonly string[];
   /** Defaults to true; false blocks patch_concept at execution time. */
   allowPatch?: boolean;
   /** Defaults to true; false blocks delete_concept at execution time. */
@@ -121,7 +123,9 @@ export function buildWriteTools(
       }),
       execute: async ({ path, frontmatter, body, log_summary }) => {
         const canonical = assertWriteAllowed(kb, policy, path);
-        const c = await kb.writeConcept(canonical, frontmatter, body, log_summary);
+        const c = policy?.createOnlyPaths?.includes(canonical)
+          ? await kb.writeNewConcept(canonical, frontmatter, body, log_summary)
+          : await kb.writeConcept(canonical, frontmatter, body, log_summary);
         filesChanged.add(c.path);
         recordHotWrite(c.path);
         trace?.record("write_concept", c.path, [c.path], true);

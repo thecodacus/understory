@@ -138,9 +138,65 @@ export class KnowledgeBase {
     });
   }
 
-  private inboxPath(id: string): string {
+  /**
+   * Atomically claim one pending item by moving it to a private processing
+   * directory. `rename` is the cross-request lock: only one HTTP handler can
+   * claim a given file, even when each request builds its own MCP server.
+   */
+  async claimNextInboxItem(): Promise<InboxItem | null> {
+    for (const item of await this.listInboxItems()) {
+      const claimed: InboxItem = { id: item.id, path: `/processing/inbox/${item.id}.json` };
+      try {
+        const destination = this.bundle.resolve(claimed.path);
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await fs.rename(this.bundle.resolve(item.path), destination);
+        return claimed;
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw err;
+      }
+    }
+    return null;
+  }
+
+  /** Read an item only after this process has atomically claimed it. */
+  async readClaimedInboxItem(id: string): Promise<string> {
+    const abs = this.bundle.resolve(`/processing/inbox/${this.inboxFileName(id)}`);
+    const raw = await fs.readFile(abs, "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || typeof (parsed as { content?: unknown }).content !== "string") {
+      throw new Error(`Invalid inbox item: ${id}`);
+    }
+    return (parsed as { content: string }).content;
+  }
+
+  /** Archive a claimed raw item only after the expected curated concept exists. */
+  archiveClaimedInboxItem(id: string): Promise<InboxItem> {
+    return this.enqueue(async () => {
+      const archived: InboxItem = { id, path: `/archive/inbox/${this.inboxFileName(id)}` };
+      const destination = this.bundle.resolve(archived.path);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.rename(this.bundle.resolve(`/processing/inbox/${this.inboxFileName(id)}`), destination);
+      return archived;
+    });
+  }
+
+  /** Return an uncurated claimed item to the pending inbox for a later retry. */
+  releaseInboxClaim(id: string): Promise<void> {
+    return this.enqueue(async () => {
+      const destination = this.bundle.resolve(this.inboxPath(id));
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.rename(this.bundle.resolve(`/processing/inbox/${this.inboxFileName(id)}`), destination);
+    });
+  }
+
+  private inboxFileName(id: string): string {
     if (!/^\d+-[a-f0-9-]+$/.test(id)) throw new Error(`Invalid inbox item ID: ${id}`);
-    return `/inbox/${id}.json`;
+    return `${id}.json`;
+  }
+
+  private inboxPath(id: string): string {
+    return `/inbox/${this.inboxFileName(id)}`;
   }
 
   // ── Mutations (serialized; auto index + log + optional commit) ──────
@@ -155,6 +211,19 @@ export class KnowledgeBase {
       const existed = await this.bundle.exists(conceptPath);
       const concept = await this.bundle.writeConcept(conceptPath, frontmatter, body);
       await this.afterMutation(concept.path, existed ? "Update" : "Creation", logSummary);
+      return concept;
+    });
+  }
+
+  writeNewConcept(
+    conceptPath: string,
+    frontmatter: ConceptFrontmatter,
+    body: string,
+    logSummary: string
+  ): Promise<Concept> {
+    return this.enqueue(async () => {
+      const concept = await this.bundle.createConcept(conceptPath, frontmatter, body);
+      await this.afterMutation(concept.path, "Creation", logSummary);
       return concept;
     });
   }

@@ -31,9 +31,6 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
     { name: "understory", version: "0.1.0" },
     { instructions: seedInstructions(seed) }
   );
-  // The HTTP service may receive overlapping scheduler calls; process at most
-  // one raw capture in this process at a time.
-  let inboxCurationActive = false;
 
   const queryTool = server.registerTool(
     "memory_query",
@@ -122,36 +119,34 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       inputSchema: {},
     },
     async () => {
-      if (inboxCurationActive) {
-        return {
-          content: [{ type: "text", text: "Inbox curation is already running; try again after it finishes." }],
-          isError: true,
-        };
-      }
-      const [item] = await kb.listInboxItems();
+      const item = await kb.claimNextInboxItem();
       if (!item) return { content: [{ type: "text", text: "Inbox is empty — nothing to curate." }] };
 
-      inboxCurationActive = true;
       try {
-        const raw = await kb.readInboxItem(item.id);
+        const raw = await kb.readClaimedInboxItem(item.id);
         const outcome = await runInboxCuration(kb, item, raw);
-        if (!outcome.ok) return mutationOutcomeResponse(outcome);
+        const expectedPath = `/curated-inbox/${item.id}.md`;
+        if (!outcome.ok || !outcome.result.filesChanged.includes(expectedPath)) {
+          await kb.releaseInboxClaim(item.id);
+          return {
+            content: [{ type: "text", text: `Curation did not create ${expectedPath}; raw capture returned to the inbox for review.` }],
+            isError: true,
+          };
+        }
 
-        const archived = await kb.archiveInboxItem(item.id);
+        const archived = await kb.archiveClaimedInboxItem(item.id);
         await refreshSeed();
-        const { summary, filesChanged } = outcome.result;
         return {
           content: [
             {
               type: "text",
-              text:
-                `${summary}\n\nFiles changed:\n${filesChanged.map((f) => `- ${f}`).join("\n") || "- none"}` +
-                `\nArchived raw capture: ${archived.path}`,
+              text: `Created ${expectedPath} and archived the exact raw capture: ${archived.path}`,
             },
           ],
         };
-      } finally {
-        inboxCurationActive = false;
+      } catch (err) {
+        await kb.releaseInboxClaim(item.id).catch(() => {});
+        return { content: [{ type: "text", text: `Inbox curation failed; raw capture was returned to the inbox. ${(err as Error).message}` }], isError: true };
       }
     }
   );

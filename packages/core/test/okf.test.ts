@@ -327,9 +327,19 @@ describe("deferred inbox", () => {
     await expect(fs.access(kb.bundle.resolve(archived.path))).resolves.toBeUndefined();
   });
 
+  it("atomically lets only one caller claim a captured item", async () => {
+    await kb.captureInboxItem("Claim me once.");
+    const claims = await Promise.all([kb.claimNextInboxItem(), kb.claimNextInboxItem()]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const claim = claims.find(Boolean)!;
+    expect(await kb.readClaimedInboxItem(claim.id)).toBe("Claim me once.");
+    await kb.releaseInboxClaim(claim.id);
+  });
+
   it("enforces the constrained curation write policy in code", async () => {
     const tools = buildWriteTools(kb, new Set(), undefined, {
       allowedWritePaths: ["/curated-inbox/only-this.md"],
+      createOnlyPaths: ["/curated-inbox/only-this.md"],
       allowPatch: false,
       allowDelete: false,
     }) as any;
@@ -349,5 +359,13 @@ describe("deferred inbox", () => {
       tools.delete_concept.execute({ path: "/outside.md", log_summary: "Attempted delete." })
     ).rejects.toThrow("Write policy forbids delete_concept");
 
+    const input = {
+      path: "/curated-inbox/only-this.md",
+      frontmatter: { type: "Test" },
+      body: "Created exactly once.",
+      log_summary: "Created a constrained test concept.",
+    };
+    await expect(tools.write_concept.execute(input)).resolves.toEqual({ written: input.path });
+    await expect(tools.write_concept.execute(input)).rejects.toMatchObject({ code: "EEXIST" });
   });
 });

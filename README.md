@@ -112,7 +112,7 @@ Teach it something (`memory_add`: "We deploy on Fridays, never Mondays"), then o
 
 `memory_add` performs full LLM-driven search, consolidation, linking, and writing before it returns. When an agent needs an immediate receipt instead, call `memory_capture`: it writes the raw text to a private inbox without an LLM.
 
-A trusted scheduler can later call `memory_process_inbox`. It processes one oldest item at a time with a constrained agent: it may create only one new concept at a generated `/curated-inbox/` path and cannot patch or delete existing concepts. The application, not the LLM, archives only that exact raw item after a successful run.
+A trusted scheduler can later call `memory_process_inbox`. It atomically claims one oldest item at a time with a constrained agent: it may create only one new concept at a generated `/curated-inbox/` path and cannot read, patch, or delete existing concepts. The application, not the LLM, archives only that exact raw item after the expected curated concept was created; otherwise the item is returned to the inbox for review.
 
 ## Stack
 

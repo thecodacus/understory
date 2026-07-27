@@ -121,6 +121,27 @@ export class Bundle {
     return { path: canonical, frontmatter: stamped, body, raw: serializeDoc(stamped, body) };
   }
 
+  async createConcept(
+    bundlePath: string,
+    frontmatter: ConceptFrontmatter,
+    body: string
+  ): Promise<Concept> {
+    const canonical = this.toBundlePath(bundlePath);
+    this.assertConceptPath(canonical);
+    if (!hasNonEmptyType(frontmatter)) {
+      throw new BundleError(
+        `Frontmatter must include a non-empty "type" field (OKF spec §5)`,
+        "INVALID_FRONTMATTER"
+      );
+    }
+    const stamped: ConceptFrontmatter = { ...frontmatter, timestamp: new Date().toISOString() };
+    const raw = serializeDoc(stamped, body);
+    const abs = this.resolve(canonical);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, raw, { encoding: "utf-8", flag: "wx" });
+    return { path: canonical, frontmatter: stamped, body, raw };
+  }
+
   /**
    * Targeted update: merge frontmatter keys (null deletes a key) and/or
    * replace the content under one top-level "# Section" heading.
