@@ -14,6 +14,7 @@ import {
   searchBundle,
   lintBundle,
 } from "../src/okf/index.js";
+import { buildWriteTools } from "../src/agent/tools.js";
 
 let root: string;
 let kb: KnowledgeBase;
@@ -310,5 +311,43 @@ describe("empty directory pruning (#10)", () => {
 
     await expect(fs.access(path.join(root, "husk"))).rejects.toThrow();
     await expect(fs.access(path.join(root, ".traces/t.json"))).resolves.toBeUndefined();
+  });
+});
+
+describe("deferred inbox", () => {
+  it("captures raw knowledge immediately and archives only that captured item", async () => {
+    const captured = await kb.captureInboxItem("A durable item waiting for curation.");
+    expect(captured.path).toMatch(/^\/inbox\/[a-z0-9-]+\.json$/);
+    expect(await kb.readInboxItem(captured.id)).toBe("A durable item waiting for curation.");
+    expect((await kb.listInboxItems()).map((item) => item.id)).toEqual([captured.id]);
+
+    const archived = await kb.archiveInboxItem(captured.id);
+    expect(archived.path).toMatch(/^\/archive\/inbox\/[a-z0-9-]+\.json$/);
+    expect(await kb.listInboxItems()).toEqual([]);
+    await expect(fs.access(kb.bundle.resolve(archived.path))).resolves.toBeUndefined();
+  });
+
+  it("enforces the constrained curation write policy in code", async () => {
+    const tools = buildWriteTools(kb, new Set(), undefined, {
+      allowedWritePaths: ["/curated-inbox/only-this.md"],
+      allowPatch: false,
+      allowDelete: false,
+    }) as any;
+
+    await expect(
+      tools.write_concept.execute({
+        path: "/outside.md",
+        frontmatter: { type: "Test" },
+        body: "must not write",
+        log_summary: "Attempted an outside write.",
+      })
+    ).rejects.toThrow("Write policy forbids write_concept");
+    await expect(
+      tools.patch_concept.execute({ path: "/outside.md", log_summary: "Attempted patch." })
+    ).rejects.toThrow("Write policy forbids patch_concept");
+    await expect(
+      tools.delete_concept.execute({ path: "/outside.md", log_summary: "Attempted delete." })
+    ).rejects.toThrow("Write policy forbids delete_concept");
+
   });
 });

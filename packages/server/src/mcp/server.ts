@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { KnowledgeBase, runMutation, runQueryCached, type MutationOutcome } from "@understory/core";
+import { KnowledgeBase, runInboxCuration, runMutation, runQueryCached, type MutationOutcome } from "@understory/core";
 import { buildSeedMemory, seedInstructions } from "./seed.js";
 
 /**
@@ -31,6 +31,9 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
     { name: "understory", version: "0.1.0" },
     { instructions: seedInstructions(seed) }
   );
+  // The HTTP service may receive overlapping scheduler calls; process at most
+  // one raw capture in this process at a time.
+  let inboxCurationActive = false;
 
   const queryTool = server.registerTool(
     "memory_query",
@@ -91,6 +94,67 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       isError: true,
     };
   };
+
+  server.registerTool(
+    "memory_capture",
+    {
+      title: "Capture knowledge quickly",
+      description:
+        "Immediately stores raw knowledge in a private inbox without an LLM. Use this when a fast receipt matters; a constrained maintenance job can curate it later.",
+      inputSchema: {
+        content: z.string().min(1).max(50_000).describe("Raw knowledge to capture for later curation"),
+      },
+    },
+    async ({ content }) => {
+      const item = await kb.captureInboxItem(content);
+      return {
+        content: [{ type: "text", text: `Captured for deferred curation: ${item.path}` }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "memory_process_inbox",
+    {
+      title: "Process one captured inbox item",
+      description:
+        "Curates one oldest raw inbox item with a constrained agent. It may create only one new curated concept and cannot modify or delete existing knowledge.",
+      inputSchema: {},
+    },
+    async () => {
+      if (inboxCurationActive) {
+        return {
+          content: [{ type: "text", text: "Inbox curation is already running; try again after it finishes." }],
+          isError: true,
+        };
+      }
+      const [item] = await kb.listInboxItems();
+      if (!item) return { content: [{ type: "text", text: "Inbox is empty — nothing to curate." }] };
+
+      inboxCurationActive = true;
+      try {
+        const raw = await kb.readInboxItem(item.id);
+        const outcome = await runInboxCuration(kb, item, raw);
+        if (!outcome.ok) return mutationOutcomeResponse(outcome);
+
+        const archived = await kb.archiveInboxItem(item.id);
+        await refreshSeed();
+        const { summary, filesChanged } = outcome.result;
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `${summary}\n\nFiles changed:\n${filesChanged.map((f) => `- ${f}`).join("\n") || "- none"}` +
+                `\nArchived raw capture: ${archived.path}`,
+            },
+          ],
+        };
+      } finally {
+        inboxCurationActive = false;
+      }
+    }
+  );
 
   server.registerTool(
     "memory_add",

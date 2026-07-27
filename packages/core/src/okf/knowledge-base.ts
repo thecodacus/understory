@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { simpleGit, type SimpleGit } from "simple-git";
 import { Bundle } from "./bundle.js";
@@ -20,6 +22,12 @@ import type {
 export interface KnowledgeBaseOptions {
   /** Commit after each mutation. Requires the bundle to be inside a git repo. */
   gitAutocommit?: boolean;
+}
+
+/** A raw, untrusted capture awaiting constrained LLM curation. */
+export interface InboxItem {
+  id: string;
+  path: string;
 }
 
 /**
@@ -71,6 +79,68 @@ export class KnowledgeBase {
   /** Inter-concept link graph (nodes + edges) for visualization. */
   graph(): Promise<GraphData> {
     return buildGraph(this.bundle);
+  }
+
+  // ── Deferred inbox (raw capture; never exposed as a concept) ─────────
+
+  /** Store raw text immediately without invoking an LLM or mutating concepts. */
+  captureInboxItem(content: string): Promise<InboxItem> {
+    return this.enqueue(async () => {
+      const id = `${Date.now()}-${randomUUID()}`;
+      const item: InboxItem = { id, path: `/inbox/${id}.json` };
+      const abs = this.bundle.resolve(item.path);
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(
+        abs,
+        JSON.stringify({ id, capturedAt: new Date().toISOString(), content }) + "\n",
+        "utf-8"
+      );
+      return item;
+    });
+  }
+
+  /** List pending raw captures in capture order without exposing their text. */
+  async listInboxItems(): Promise<InboxItem[]> {
+    const inbox = this.bundle.resolve("/inbox");
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(inbox, { withFileTypes: true });
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw err;
+    }
+    return entries
+      .filter((entry) => entry.isFile() && /^\d+-[a-f0-9-]+\.json$/.test(entry.name))
+      .map((entry) => ({ id: entry.name.slice(0, -".json".length), path: `/inbox/${entry.name}` }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  /** Read exactly one raw capture by generated ID. */
+  async readInboxItem(id: string): Promise<string> {
+    const abs = this.bundle.resolve(this.inboxPath(id));
+    const raw = await fs.readFile(abs, "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || typeof (parsed as { content?: unknown }).content !== "string") {
+      throw new Error(`Invalid inbox item: ${id}`);
+    }
+    return (parsed as { content: string }).content;
+  }
+
+  /** Move exactly one processed raw capture to the archive; never lets the LLM delete it. */
+  archiveInboxItem(id: string): Promise<InboxItem> {
+    return this.enqueue(async () => {
+      const source = this.bundle.resolve(this.inboxPath(id));
+      const archived: InboxItem = { id, path: `/archive/inbox/${id}.json` };
+      const destination = this.bundle.resolve(archived.path);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.rename(source, destination);
+      return archived;
+    });
+  }
+
+  private inboxPath(id: string): string {
+    if (!/^\d+-[a-f0-9-]+$/.test(id)) throw new Error(`Invalid inbox item ID: ${id}`);
+    return `/inbox/${id}.json`;
   }
 
   // ── Mutations (serialized; auto index + log + optional commit) ──────
