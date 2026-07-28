@@ -77,10 +77,17 @@ function collectConcepts(node: TreeNode): {
     } else if (child.kind === "concept") {
       out.count++;
       if (child.type) out.types.add(child.type);
-      out.descriptions.push(child.description ?? child.title ?? child.name);
+      out.descriptions.push(deriveConceptDescription(child));
     }
   }
   return out;
+}
+
+/** Derives a concept description always containing either name or title from a tree node representing a concept */
+export function deriveConceptDescription(node: TreeNode): string {
+  const subject: string = `**${node.title ?? node.name}**`;
+
+  return node.description ? `${subject}, ${node.description}` : subject;
 }
 
 /** The initialize `instructions` block — seed plus the instinct-igniting rules. */
