@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import ReactMarkdown from "react-markdown";
-import { authHeaders } from "../api";
+import { apiUrl, authHeaders } from "../api";
 import type { AppConfig } from "../api";
 
 const WRITE_TOOLS = new Set(["write_concept", "patch_concept", "delete_concept"]);
@@ -24,7 +24,7 @@ export function ChatPanel({
   const [model, setModel] = useState("");
   const { messages, sendMessage, status } = useChat({
     transport: new DefaultChatTransport({
-      api: "/api/chat",
+      api: apiUrl("/api/chat"),
       headers: () => authHeaders(),
       body: () => ({ model: model || undefined }),
     }),

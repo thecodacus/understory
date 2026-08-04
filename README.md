@@ -180,6 +180,24 @@ claude mcp add --transport http ustory http://host:3800/mcp \
 
 The stdio transport needs no token — it's a local process spawned by the client.
 
+### Serving under a sub-path
+
+The web UI uses relative URLs throughout, so it works behind a path-prefixing reverse proxy — no configuration needed. Any proxy that strips the prefix before forwarding works:
+
+```bash
+# Tailscale
+tailscale serve --bg --set-path=/understory http://localhost:3800
+```
+
+```caddy
+# Caddy
+handle_path /understory/* {
+  reverse_proxy localhost:3800
+}
+```
+
+One rule: open the UI with a trailing slash (`https://host/understory/`, not `.../understory`) — relative URLs resolve against the last path segment, so without the slash they escape the prefix. If your proxy can redirect `/understory` → `/understory/`, do that.
+
 ### Seed memory
 
 A client LLM that only sees four bare tool names never gets the instinct to check memory. So at **session start** the server injects a compact overview of what the knowledge base contains (directories, concepts with types + descriptions, recent activity) through both channels that reach the model:

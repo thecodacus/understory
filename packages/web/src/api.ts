@@ -101,8 +101,18 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Resolve an API path against the page URL so calls work when the UI is served
+ * behind a path-prefixing reverse proxy (e.g. https://host/understory/), where
+ * a root-absolute "/api/..." would escape the prefix. Matches how the page's
+ * relative asset URLs resolve.
+ */
+export function apiUrl(path: string): string {
+  return new URL(path.replace(/^\//, ""), document.baseURI).toString();
+}
+
 async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: authHeaders() });
+  const res = await fetch(apiUrl(url), { headers: authHeaders() });
   if (!res.ok) throw new ApiError(res.status, `${res.status} ${await res.text()}`);
   return res.json();
 }
