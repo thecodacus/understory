@@ -25,6 +25,10 @@ services:
     image: ghcr.io/thecodacus/understory:latest
     ports:
       - "3800:3800"
+    # Lets the container reach a llama.cpp server running on the host via
+    # http://host.docker.internal:8080/v1 (see "Local llama.cpp" below).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Your memory lives here as plain markdown — a named volume, or point
       # a bind mount (e.g. ./my-memory:/bundle) at any OKF bundle.
@@ -77,12 +81,17 @@ LLM_API_BASE_URL=https://api.groq.com/openai/v1 LLM_API_KEY=gsk_... LLM_MODEL=ll
 
 **Local llama.cpp:**
 ```bash
-LLM_API_BASE_URL=http://localhost:8080/v1 LLM_MODEL=
+LLM_API_BASE_URL=http://host.docker.internal:8080/v1 LLM_MODEL=
 ```
+
+> When understory runs in Docker, `localhost` is the container itself, not the
+> host — so a llama-server on the host is reached at `host.docker.internal`
+> (the compose files above already map it via `extra_hosts`). Running from
+> source on the same box as llama-server, use `http://localhost:8080/v1`.
 
 **Local llama.cpp with DeepSeek fallback:**
 ```bash
-LLM_API_BASE_URL=http://localhost:8080/v1 LLM_MODEL= \
+LLM_API_BASE_URL=http://host.docker.internal:8080/v1 LLM_MODEL= \
 LLM_FALLBACK_API_BASE_URL=https://api.deepseek.com/v1 LLM_FALLBACK_API_KEY=sk-... LLM_FALLBACK_MODEL=deepseek-chat
 ```
 

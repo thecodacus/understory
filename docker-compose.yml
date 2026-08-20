@@ -3,6 +3,10 @@ services:
     build: .
     ports:
       - "3800:3800"
+    # Lets the container reach a llama.cpp server running on the host via
+    # http://host.docker.internal:8080/v1 (see "Local llama.cpp" in the README).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./sample-bundle:/bundle
     environment:

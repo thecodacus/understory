@@ -6,6 +6,10 @@ services:
     image: ghcr.io/thecodacus/understory:latest
     ports:
       - "3800:3800"
+    # Lets the container reach a llama.cpp server running on the host via
+    # http://host.docker.internal:8080/v1 (see "Local llama.cpp" in the README).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Persistent OKF bundle. Swap for a bind mount (e.g. /srv/okf-bundle:/bundle)
       # if you want to edit the markdown from the host / sync it with git.
