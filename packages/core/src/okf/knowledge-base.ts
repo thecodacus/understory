@@ -55,11 +55,19 @@ export class KnowledgeBase {
     }
     try {
       const isRepo = await this.git.checkIsRepo();
+      if (!isRepo) await this.git.init();
+      // Environments without a global committer identity (fresh containers,
+      // CI) get a repo-local fallback — same identity the Docker image sets
+      // at system scope.
+      const email = await this.git.raw(["config", "--get", "user.email"]).catch(() => "");
+      if (!email.trim()) {
+        await this.git.addConfig("user.name", "understory");
+        await this.git.addConfig("user.email", "understory@localhost");
+      }
       if (!isRepo) {
-        await this.git.init();
-        // --allow-empty: always produces the commit and proves committer
-        // identity works, independent of staging quirks; the first real
-        // mutation's add+commit captures the existing content.
+        // --allow-empty: always produces the commit and proves committing
+        // works, independent of staging quirks; the first real mutation's
+        // add+commit captures the existing content.
         await this.git.raw(["commit", "--allow-empty", "-m", "chore: initialize memory history"]);
       }
       // Surface identity/ownership problems now, not on the first mutation.
