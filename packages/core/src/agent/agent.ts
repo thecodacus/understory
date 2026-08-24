@@ -12,9 +12,14 @@ import { buildReadTools, buildWriteTools, formatTree } from "./tools.js";
 import { TraceRecorder, TraceStore } from "./trace.js";
 
 const MAX_STEPS = 12;
+const DEFAULT_TIMEOUT_MS = 120_000;
 
 export interface AgentOptions {
   model?: string;
+  /** Cancel the model run when the caller disconnects or explicitly aborts. */
+  abortSignal?: AbortSignal;
+  /** Total deadline for the model run. Defaults to UNDERSTORY_LLM_TIMEOUT_MS or 120 seconds. */
+  timeoutMs?: number;
 }
 
 export interface QueryResult {
@@ -95,6 +100,17 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+export function modelAbortSignal(options: AgentOptions, env: NodeJS.ProcessEnv = process.env): AbortSignal {
+  const envTimeout = Number(env.UNDERSTORY_LLM_TIMEOUT_MS);
+  const timeoutMs =
+    options.timeoutMs ??
+    (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : DEFAULT_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return options.abortSignal
+    ? AbortSignal.any([options.abortSignal, timeoutSignal])
+    : timeoutSignal;
+}
+
 /** Read-only Q&A over the bundle. */
 export async function runQuery(
   kb: KnowledgeBase,
@@ -109,6 +125,7 @@ export async function runQuery(
     modelChain = resolved.modelChain;
     const result = await generateText({
       model: resolved.model,
+      abortSignal: modelAbortSignal(options),
       system: buildSystemPrompt(ctx),
       prompt: question,
       tools: buildReadTools(kb, recorder),
@@ -139,12 +156,21 @@ export async function runMutation(
     modelChain = resolved.modelChain;
     const result = await generateText({
       model: resolved.model,
+      abortSignal: modelAbortSignal(options),
       system: buildSystemPrompt(ctx),
       prompt: instruction,
       tools: { ...buildReadTools(kb, recorder), ...buildWriteTools(kb, filesChanged, recorder) },
       stopWhen: stepCountIs(MAX_STEPS),
       temperature: 0.2,
     });
+    if (filesChanged.size === 0) {
+      const message =
+        `Mutation completed without changing any files. Model response: ` +
+        (result.text.trim() || "(empty response)");
+      const trace = recorder.finalize("mutation", instruction, message, "failed", modelChain);
+      await traceStore(kb).save(trace);
+      return { ok: false, status: "failed", error: message };
+    }
     const trace = recorder.finalize("mutation", instruction, result.text, "success", modelChain);
     await traceStore(kb).save(trace);
     return {
@@ -196,6 +222,7 @@ export async function streamChat(
     modelChain = resolved.modelChain;
     const result = streamText({
       model: resolved.model,
+      abortSignal: modelAbortSignal(options),
       system: buildSystemPrompt(ctx),
       messages,
       tools: { ...buildReadTools(kb, recorder), ...buildWriteTools(kb, filesChanged, recorder) },

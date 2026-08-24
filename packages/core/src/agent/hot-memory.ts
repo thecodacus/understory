@@ -1,6 +1,6 @@
 import type { KnowledgeBase } from "../okf/index.js";
 import { parseDuration } from "../util/duration.js";
-import type { AgentOptions } from "./agent.js";
+import { modelAbortSignal, type AgentOptions } from "./agent.js";
 
 /**
  * Hot memory: a small working set of recently written concepts and recent
@@ -133,6 +133,12 @@ const defaultGenerate: HotGenerate = async (system, prompt, options) => {
     model = await providers.createModel(options.model ? { ...cfg, model: options.model } : cfg);
   }
   const { generateText } = await import("ai");
-  const result = await generateText({ model, system, prompt, temperature: 0 });
+  const result = await generateText({
+    model,
+    abortSignal: modelAbortSignal(options),
+    system,
+    prompt,
+    temperature: 0,
+  });
   return result.text;
 };

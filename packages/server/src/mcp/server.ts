@@ -14,7 +14,7 @@ import { buildSeedMemory, seedInstructions } from "./seed.js";
  * fallback; every tool-calling client loads descriptions). Without it the
  * client model has no signal that memory might hold an answer.
  */
-export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
+export async function buildMcpServer(kb: KnowledgeBase, abortSignal?: AbortSignal): Promise<McpServer> {
   // Seed generation must never prevent the server from starting — a missing
   // or empty bundle root degrades to a minimal seed, not a crash.
   const seed = await buildSeedMemory(kb).catch((err: Error) => {
@@ -40,7 +40,7 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       inputSchema: { question: z.string().describe("The question to answer") },
     },
     async ({ question }) => {
-      const { answer, source } = await runQueryCached(kb, question);
+      const { answer, source } = await runQueryCached(kb, question, { abortSignal });
       const marker = source === "cache" ? "\n\n(cached answer)" : source === "hot" ? "\n\n(hot memory)" : "";
       return {
         content: [{ type: "text", text: `${answer}${marker}` }],
@@ -120,7 +120,7 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
         `must use the write tools.\n\n` +
         `KNOWLEDGE TO RECORD:\n${content}` +
         (suggested_path ? `\n\nIf it fits, place new content at ${suggested_path}.` : "");
-      const outcome = await runMutation(kb, instruction);
+      const outcome = await runMutation(kb, instruction, { abortSignal });
       await refreshSeed();
       return mutationOutcomeResponse(outcome);
     }
@@ -137,7 +137,7 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       },
     },
     async ({ instruction }) => {
-      const outcome = await runMutation(kb, instruction);
+      const outcome = await runMutation(kb, instruction, { abortSignal });
       await refreshSeed();
       return mutationOutcomeResponse(outcome);
     }
@@ -219,7 +219,7 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
         `or remove the link if the target is gone.\n${brokenList}\n\n` +
         `Follow the enrich / link-both-ways rules. Read concepts before editing.`;
 
-      const outcome = await runMutation(kb, instruction);
+      const outcome = await runMutation(kb, instruction, { abortSignal });
       await refreshSeed();
       if (!outcome.ok) return mutationOutcomeResponse(outcome);
       const { summary, filesChanged } = outcome.result;
