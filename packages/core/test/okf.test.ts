@@ -312,3 +312,26 @@ describe("empty directory pruning (#10)", () => {
     await expect(fs.access(path.join(root, ".traces/t.json"))).resolves.toBeUndefined();
   });
 });
+
+describe("git autocommit readiness (#21)", () => {
+  it("initializes a non-repo bundle with a first commit, then commits mutations", async () => {
+    const gkb = new KnowledgeBase(root, { gitAutocommit: true });
+    const ready = await gkb.ensureGitReady();
+    expect(ready.ok).toBe(true);
+
+    await gkb.writeConcept("/facts/one.md", { type: "Fact", title: "One" }, "x", "Added one.");
+    const { execSync } = await import("node:child_process");
+    const log = execSync("git log --oneline", { cwd: root }).toString().trim().split("\n");
+    // init commit + mutation commit
+    expect(log.length).toBeGreaterThanOrEqual(2);
+    expect(log[0]).toContain("creation");
+    expect(log[log.length - 1]).toContain("initialize memory history");
+  });
+
+  it("is a no-op when autocommit is not requested", async () => {
+    const ready = await kb.ensureGitReady();
+    expect(ready.ok).toBe(true);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(path.join(root, ".git"))).toBe(false);
+  });
+});
