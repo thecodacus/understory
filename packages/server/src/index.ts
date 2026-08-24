@@ -22,6 +22,16 @@ const kb = new KnowledgeBase(bundleRoot, {
 
 startDreamer(kb);
 
+if (process.env.GIT_AUTOCOMMIT === "true") {
+  const gitReady = await kb.ensureGitReady();
+  if (!gitReady.ok) {
+    console.error(`[understory] GIT_AUTOCOMMIT=true but autocommit cannot work: ${gitReady.reason}`);
+    process.exit(1);
+  }
+  console.log("[understory] git autocommit: enabled (bundle history is being recorded)");
+}
+
+
 const app = express();
 
 // Validate LLM config at startup — fail fast with a clear error.
