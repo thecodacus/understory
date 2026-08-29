@@ -7,20 +7,15 @@ COPY packages/server/package.json packages/server/
 COPY packages/web/package.json packages/web/
 RUN pnpm install --frozen-lockfile
 COPY packages packages
-RUN pnpm -r build && pnpm prune --prod
+RUN pnpm -r build
+RUN pnpm --filter @understory/server deploy --prod --legacy /deploy/server
 
-FROM node:22-alpine
+FROM node:22-alpine AS runtime
 WORKDIR /app
-COPY --from=build /app/node_modules node_modules
-COPY --from=build /app/packages/core/dist packages/core/dist
-COPY --from=build /app/packages/core/package.json packages/core/
-COPY --from=build /app/packages/core/node_modules packages/core/node_modules
-COPY --from=build /app/packages/server/dist packages/server/dist
-COPY --from=build /app/packages/server/package.json packages/server/
-COPY --from=build /app/packages/server/node_modules packages/server/node_modules
-COPY --from=build /app/packages/web/dist packages/web/dist
+COPY --from=build /deploy/server server
+COPY --from=build /app/packages/web/dist web/dist
 
-ENV BUNDLE_ROOT=/bundle PORT=3800
+ENV NODE_ENV=production BUNDLE_ROOT=/bundle PORT=3800
 EXPOSE 3800
 VOLUME /bundle
-CMD ["node", "packages/server/dist/index.js"]
+CMD ["node", "server/dist/index.js"]
