@@ -82,7 +82,35 @@ export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder) {
   };
 }
 
-export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, trace?: TraceRecorder) {
+export interface WriteToolPolicy {
+  /** If set, write_concept may create or overwrite only these canonical bundle paths. */
+  allowedWritePaths?: readonly string[];
+  /** Paths which must be atomically created and must never overwrite an existing file. */
+  createOnlyPaths?: readonly string[];
+  /** Defaults to true; false blocks patch_concept at execution time. */
+  allowPatch?: boolean;
+  /** Defaults to true; false blocks delete_concept at execution time. */
+  allowDelete?: boolean;
+}
+
+function assertWriteAllowed(kb: KnowledgeBase, policy: WriteToolPolicy | undefined, requestedPath: string): string {
+  const canonical = kb.bundle.toBundlePath(requestedPath);
+  if (policy?.allowedWritePaths && !policy.allowedWritePaths.includes(canonical)) {
+    throw new Error(`Write policy forbids write_concept outside: ${policy.allowedWritePaths.join(", ")}`);
+  }
+  return canonical;
+}
+
+/**
+ * Build the mutation tools. A policy is enforced inside the tool executions,
+ * so untrusted text cannot expand an agent's write scope by prompt injection.
+ */
+export function buildWriteTools(
+  kb: KnowledgeBase,
+  filesChanged: Set<string>,
+  trace?: TraceRecorder,
+  policy?: WriteToolPolicy
+) {
   return {
     write_concept: tool({
       description:
@@ -94,7 +122,10 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
         log_summary: logSummary,
       }),
       execute: async ({ path, frontmatter, body, log_summary }) => {
-        const c = await kb.writeConcept(path, frontmatter, body, log_summary);
+        const canonical = assertWriteAllowed(kb, policy, path);
+        const c = policy?.createOnlyPaths?.includes(canonical)
+          ? await kb.writeNewConcept(canonical, frontmatter, body, log_summary)
+          : await kb.writeConcept(canonical, frontmatter, body, log_summary);
         filesChanged.add(c.path);
         recordHotWrite(c.path);
         trace?.record("write_concept", c.path, [c.path], true);
@@ -126,6 +157,7 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
         log_summary: logSummary,
       }),
       execute: async ({ path, frontmatter, replace_section, replace_body, log_summary }) => {
+        if (policy?.allowPatch === false) throw new Error("Write policy forbids patch_concept");
         const c = await kb.patchConcept(
           path,
           {
@@ -151,6 +183,7 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
         log_summary: logSummary,
       }),
       execute: async ({ path, log_summary }) => {
+        if (policy?.allowDelete === false) throw new Error("Write policy forbids delete_concept");
         await kb.deleteConcept(path, log_summary);
         filesChanged.add(path);
         recordHotDelete(path);

@@ -9,4 +9,4 @@ export { lintBundle } from "./lint.js";
 export type { LintReport, LintFinding, BrokenLink } from "./lint.js";
 export { buildGraph, scanGraph } from "./graph.js";
 export type { GraphData, GraphNode, GraphEdge } from "./graph.js";
-export { KnowledgeBase, type KnowledgeBaseOptions } from "./knowledge-base.js";
+export { KnowledgeBase, type KnowledgeBaseOptions, type InboxItem } from "./knowledge-base.js";

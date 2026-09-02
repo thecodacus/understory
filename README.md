@@ -8,7 +8,7 @@ Bundles follow the [Open Knowledge Format (OKF) v0.1 spec](https://github.com/Go
 
 **Three ways in, one agent:**
 
-- **MCP server** — `memory_query` / `memory_add` / `memory_update` / `memory_status` / `memory_maintain` tools over stdio or streamable HTTP. Each call drives an internal LLM agent with the OKF spec in its system prompt.
+- **MCP server** — `memory_query` / `memory_add` / `memory_capture` / `memory_process_inbox` / `memory_update` / `memory_status` / `memory_maintain` tools over stdio or streamable HTTP. Each call drives an internal LLM agent with the OKF spec in its system prompt.
 - **Web UI** — browse the bundle (tree, concept viewer, update log, conformance badge), see the memory as an Obsidian-style **force-directed graph** (drag/pan/zoom, colored by type, sized by connections, orphans ringed red, click to open), and chat with the same agent to test it. Tool calls render inline so you can watch it work.
 - **Query-path replay** — every agent run (query/mutation/chat) records its traversal (searches → reads → writes) as a compact notation, persisted under `<bundle>/.traces/`. The graph view lists recent runs; selecting one replays the path as numbered directed hops over the graph — visited concepts ringed, search hits dotted, everything else faded.
 - **CLI** — `pnpm agent:query "..."` / `pnpm agent:mutate "..."` smoke entries.
@@ -107,6 +107,12 @@ Then:
 - Your agent now has `memory_query` / `memory_add` / `memory_update` / `memory_status` / `memory_maintain`, and gets a seed overview of the memory at every session start.
 
 Teach it something (`memory_add`: "We deploy on Fridays, never Mondays"), then open the graph and watch the concept wire itself in. Deploying with Portainer? Use [docker-compose.portainer.yml](docker-compose.portainer.yml) as a repository stack.
+
+### Fast capture, deferred curation
+
+`memory_add` performs full LLM-driven search, consolidation, linking, and writing before it returns. When an agent needs an immediate receipt instead, call `memory_capture`: it writes the raw text to a private inbox without an LLM.
+
+A trusted scheduler can later call `memory_process_inbox`. It atomically claims one oldest item at a time with a constrained agent: it may create only one new concept at a generated `/curated-inbox/` path and cannot read, patch, or delete existing concepts. The application, not the LLM, archives only that exact raw item after the expected curated concept was created; otherwise the item is returned to the inbox for review.
 
 ## Stack
 

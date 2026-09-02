@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { KnowledgeBase, runMutation, runQueryCached, type MutationOutcome } from "@understory/core";
+import { KnowledgeBase, runInboxCuration, runMutation, runQueryCached, type MutationOutcome } from "@understory/core";
 import { buildSeedMemory, seedInstructions } from "./seed.js";
 
 /**
@@ -91,6 +91,65 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
       isError: true,
     };
   };
+
+  server.registerTool(
+    "memory_capture",
+    {
+      title: "Capture knowledge quickly",
+      description:
+        "Immediately stores raw knowledge in a private inbox without an LLM. Use this when a fast receipt matters; a constrained maintenance job can curate it later.",
+      inputSchema: {
+        content: z.string().min(1).max(50_000).describe("Raw knowledge to capture for later curation"),
+      },
+    },
+    async ({ content }) => {
+      const item = await kb.captureInboxItem(content);
+      return {
+        content: [{ type: "text", text: `Captured for deferred curation: ${item.path}` }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "memory_process_inbox",
+    {
+      title: "Process one captured inbox item",
+      description:
+        "Curates one oldest raw inbox item with a constrained agent. It may create only one new curated concept and cannot modify or delete existing knowledge.",
+      inputSchema: {},
+    },
+    async () => {
+      const item = await kb.claimNextInboxItem();
+      if (!item) return { content: [{ type: "text", text: "Inbox is empty — nothing to curate." }] };
+
+      try {
+        const raw = await kb.readClaimedInboxItem(item.id);
+        const outcome = await runInboxCuration(kb, item, raw);
+        const expectedPath = `/curated-inbox/${item.id}.md`;
+        if (!outcome.ok || !outcome.result.filesChanged.includes(expectedPath)) {
+          await kb.releaseInboxClaim(item.id);
+          return {
+            content: [{ type: "text", text: `Curation did not create ${expectedPath}; raw capture returned to the inbox for review.` }],
+            isError: true,
+          };
+        }
+
+        const archived = await kb.archiveClaimedInboxItem(item.id);
+        await refreshSeed();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Created ${expectedPath} and archived the exact raw capture: ${archived.path}`,
+            },
+          ],
+        };
+      } catch (err) {
+        await kb.releaseInboxClaim(item.id).catch(() => {});
+        return { content: [{ type: "text", text: `Inbox curation failed; raw capture was returned to the inbox. ${(err as Error).message}` }], isError: true };
+      }
+    }
+  );
 
   server.registerTool(
     "memory_add",
