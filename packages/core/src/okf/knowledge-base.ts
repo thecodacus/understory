@@ -1,4 +1,5 @@
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import { simpleGit, type SimpleGit } from "simple-git";
 import { Bundle } from "./bundle.js";
 import { pruneEmptyDirs, regenerateIndexChain } from "./indexer.js";
@@ -57,6 +58,19 @@ export class KnowledgeBase {
 
   readLog(): Promise<LogEntry[]> {
     return readLog(this.bundle);
+  }
+
+  async writeCheckpoint(sessionId: string, messages: unknown[]): Promise<string> {
+    const safe = sessionId.replace(/[^a-zA-Z0-9._-]/g, "_");
+    if (!safe) throw new Error("Checkpoint session ID is required");
+    const dir = path.join(this.bundle.root, ".checkpoints");
+    const target = path.join(dir, `${safe}.json`);
+    const temp = `${target}.tmp-${process.pid}-${Date.now()}`;
+    const payload = JSON.stringify({ version: 1, session_id: sessionId, created_at: new Date().toISOString(), messages });
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(temp, payload, { encoding: "utf-8", mode: 0o600 });
+    await fs.rename(temp, target);
+    return `/.checkpoints/${safe}.json`;
   }
 
   validate(): Promise<ConformanceReport> {
