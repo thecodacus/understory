@@ -48,6 +48,22 @@ export async function buildMcpServer(kb: KnowledgeBase): Promise<McpServer> {
     }
   );
 
+  server.registerTool(
+    "memory_checkpoint_save",
+    {
+      title: "Save pre-compression checkpoint",
+      description: "Durably save a session transcript before lossy compression.",
+      inputSchema: {
+        session_id: z.string().min(1),
+        messages: z.array(z.unknown()),
+      },
+    },
+    async ({ session_id, messages }) => {
+      const path = await kb.writeCheckpoint(session_id, messages);
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, path }) }] };
+    }
+  );
+
   /**
    * Re-derive the seed after a mutation and push it into memory_query's
    * description; RegisteredTool.update() emits tools/list_changed so
