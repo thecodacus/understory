@@ -26,6 +26,7 @@ export default function App() {
   const [needsToken, setNeedsToken] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<ProfileInfo["mode"] | null>(null);
   const [profile, setProfile] = useState<ProfileInfo | null>(null);
 
   const refresh = useCallback(() => {
@@ -36,8 +37,10 @@ export default function App() {
         setNeedsToken(false);
       })
       .catch((e) => {
-        if (e instanceof ApiError && e.status === 401) setNeedsToken(true);
-        else setError(String(e));
+        if (e instanceof ApiError && e.status === 401) {
+          setAuthMode(e.authMode ?? null);
+          setNeedsToken(true);
+        } else setError(String(e));
       });
     api.validate().then(setReport).catch(() => {});
     api.log().then(setLog).catch(() => {});
@@ -115,15 +118,22 @@ export default function App() {
         >
           <h1 className="text-sm font-bold tracking-wide text-cyan-300">understory 🌱</h1>
           <p className="mt-2 text-sm text-zinc-400">
-            This server needs an access key: your profile's API key, or the server's{" "}
-            <code className="text-zinc-300">AUTH_TOKEN</code>. The key decides which memory opens.
+            {authMode === "profiles" ? (
+              <>This server hosts several memories. Enter your profile's API key; it decides which memory opens.</>
+            ) : authMode === "single" ? (
+              <>
+                This server requires an access token (its <code className="text-zinc-300">AUTH_TOKEN</code>).
+              </>
+            ) : (
+              <>This server requires an access key.</>
+            )}
           </p>
           {tokenError && <p className="mt-2 text-sm text-red-400">{tokenError}</p>}
           <input
             type="password"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="Access key"
+            placeholder={authMode === "profiles" ? "Profile API key" : "Access token"}
             autoFocus
             className="mt-3 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-cyan-600"
           />

@@ -29,7 +29,7 @@ interface RegistryFile {
   profiles: ProfileRecord[];
 }
 
-export type ProfileErrorCode = "INVALID_NAME" | "EXISTS" | "NOT_FOUND" | "CORRUPT_REGISTRY";
+export type ProfileErrorCode = "INVALID_NAME" | "EXISTS" | "NOT_FOUND" | "CORRUPT_REGISTRY" | "LOCKED";
 
 export class ProfileError extends Error {
   constructor(message: string, readonly code: ProfileErrorCode) {
@@ -42,9 +42,22 @@ const REGISTRY_FILE = "profiles.json";
 // Lowercase, no dots or slashes: a name is used verbatim as a directory.
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const KEY_PREFIX = "usk_";
+// A registry change takes milliseconds; a lock older than this was left by a
+// process that died while holding it.
+const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 10_000;
 
 function sha256(value: string): Buffer {
   return createHash("sha256").update(value).digest();
+}
+
+/**
+ * Identity of the registry file as last seen. Every save replaces the file
+ * by rename, so the inode changes even when size and a coarse mtime do not
+ * (a key rotation rewrites a hash of the same length).
+ */
+function fileStamp(st: { ino: number; mtimeMs: number; size: number }): string {
+  return `${st.ino}:${st.mtimeMs}:${st.size}`;
 }
 
 function generateKey(): string {
@@ -58,6 +71,7 @@ export class ProfileRegistry {
   // One KnowledgeBase per profile for the life of the process: its mutation
   // queue only serializes writes if every request shares the instance.
   private readonly kbs = new Map<string, KnowledgeBase>();
+  private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(root: string, private readonly kbOptions: KnowledgeBaseOptions = {}) {
     this.root = path.resolve(root);
@@ -75,15 +89,14 @@ export class ProfileRegistry {
    * Re-read the registry if it changed on disk, so profiles created or
    * revoked with the CLI take effect on a running server without a restart.
    */
-  async refresh(): Promise<void> {
+  async refresh(force = false): Promise<void> {
     let stamp = "absent";
     try {
-      const st = await fs.stat(this.file);
-      stamp = `${st.mtimeMs}:${st.size}`;
+      stamp = fileStamp(await fs.stat(this.file));
     } catch {
       // No registry yet: an empty set of profiles.
     }
-    if (stamp === this.loadedStamp) return;
+    if (!force && stamp === this.loadedStamp) return;
 
     let records: ProfileRecord[] = [];
     if (stamp !== "absent") {
@@ -114,14 +127,62 @@ export class ProfileRegistry {
     this.kbs.delete(name);
   }
 
+  /** Write the registry atomically. Only ever called from inside mutate(). */
   private async save(): Promise<void> {
-    await fs.mkdir(this.root, { recursive: true });
     const body: RegistryFile = { version: 1, profiles: this.records };
-    const tmp = `${this.file}.tmp`;
+    const tmp = `${this.file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     await fs.writeFile(tmp, JSON.stringify(body, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
     await fs.rename(tmp, this.file);
-    const st = await fs.stat(this.file);
-    this.loadedStamp = `${st.mtimeMs}:${st.size}`;
+    this.loadedStamp = fileStamp(await fs.stat(this.file));
+  }
+
+  /**
+   * Run one registry change. Changes are queued within this process and take
+   * a lock file across processes (the server and the CLI share the registry),
+   * and each starts from a fresh read made while holding the lock. Without
+   * this, two writers would each save their own copy and the later one would
+   * silently drop the other's change, which for a revoked key means access
+   * coming back.
+   */
+  private mutate<T>(change: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+      await fs.mkdir(this.root, { recursive: true });
+      const release = await this.acquireLock();
+      try {
+        await this.refresh(true);
+        return await change();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.mutationQueue.then(run, run);
+    this.mutationQueue = next.catch(() => {});
+    return next;
+  }
+
+  private async acquireLock(): Promise<() => Promise<void>> {
+    const lock = `${this.file}.lock`;
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      try {
+        const handle = await fs.open(lock, "wx", 0o600);
+        await handle.writeFile(String(process.pid));
+        await handle.close();
+        return () => fs.rm(lock, { force: true });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      }
+      const age = await fs.stat(lock).then((st) => Date.now() - st.mtimeMs, () => null);
+      if (age === null) continue; // released between our attempt and the stat
+      if (age > LOCK_STALE_MS) {
+        await fs.rm(lock, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) {
+        throw new ProfileError(`profile registry is locked by another process (${lock})`, "LOCKED");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 20));
+    }
   }
 
   private kbFor(name: string): KnowledgeBase {
@@ -156,31 +217,34 @@ export class ProfileRegistry {
         "INVALID_NAME"
       );
     }
-    await this.refresh();
-    if (this.records.some((r) => r.name === name)) {
-      throw new ProfileError(`profile "${name}" already exists`, "EXISTS");
-    }
-    await fs.mkdir(this.bundlePath(name), { recursive: true });
-    const key = generateKey();
-    this.records = [
-      ...this.records,
-      { name, keyHash: sha256(key).toString("hex"), createdAt: new Date().toISOString() },
-    ];
-    await this.save();
-    return { name, key };
+    return this.mutate(async () => {
+      if (this.records.some((r) => r.name === name)) {
+        throw new ProfileError(`profile "${name}" already exists`, "EXISTS");
+      }
+      await fs.mkdir(this.bundlePath(name), { recursive: true });
+      const key = generateKey();
+      this.records = [
+        ...this.records,
+        { name, keyHash: sha256(key).toString("hex"), createdAt: new Date().toISOString() },
+      ];
+      await this.save();
+      return { name, key };
+    });
   }
 
   /** Issue a new key for a profile; the old key stops working immediately. */
   async rotate(name: string): Promise<{ name: string; key: string }> {
-    await this.refresh();
-    const record = this.records.find((r) => r.name === name);
-    if (!record) throw new ProfileError(`profile "${name}" not found`, "NOT_FOUND");
-    const key = generateKey();
-    this.records = this.records.map((r) =>
-      r.name === name ? { ...r, keyHash: sha256(key).toString("hex") } : r
-    );
-    await this.save();
-    return { name, key };
+    return this.mutate(async () => {
+      if (!this.records.some((r) => r.name === name)) {
+        throw new ProfileError(`profile "${name}" not found`, "NOT_FOUND");
+      }
+      const key = generateKey();
+      this.records = this.records.map((r) =>
+        r.name === name ? { ...r, keyHash: sha256(key).toString("hex") } : r
+      );
+      await this.save();
+      return { name, key };
+    });
   }
 
   /**
@@ -188,17 +252,18 @@ export class ProfileRegistry {
    * is set, so removing access is never the same step as destroying data.
    */
   async remove(name: string, options: { purge?: boolean } = {}): Promise<void> {
-    await this.refresh();
-    if (!this.records.some((r) => r.name === name)) {
-      throw new ProfileError(`profile "${name}" not found`, "NOT_FOUND");
-    }
-    this.records = this.records.filter((r) => r.name !== name);
-    await this.save();
-    const kb = this.kbs.get(name);
-    if (kb) this.forget(name, kb);
-    if (options.purge) {
-      await fs.rm(this.bundlePath(name), { recursive: true, force: true });
-    }
+    return this.mutate(async () => {
+      if (!this.records.some((r) => r.name === name)) {
+        throw new ProfileError(`profile "${name}" not found`, "NOT_FOUND");
+      }
+      this.records = this.records.filter((r) => r.name !== name);
+      await this.save();
+      const kb = this.kbs.get(name);
+      if (kb) this.forget(name, kb);
+      if (options.purge) {
+        await fs.rm(this.bundlePath(name), { recursive: true, force: true });
+      }
+    });
   }
 
   /** The profile a presented API key belongs to, or null. */

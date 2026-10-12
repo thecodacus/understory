@@ -4,7 +4,7 @@ import { ProfileError, type ProfileRegistry } from "./profiles.js";
 
 function fail(res: Response, err: unknown): void {
   if (err instanceof ProfileError) {
-    const status = { INVALID_NAME: 400, EXISTS: 409, NOT_FOUND: 404, CORRUPT_REGISTRY: 503 }[err.code];
+    const status = { INVALID_NAME: 400, EXISTS: 409, NOT_FOUND: 404, CORRUPT_REGISTRY: 503, LOCKED: 503 }[err.code];
     res.status(status).json({ error: err.message });
     return;
   }
@@ -47,7 +47,18 @@ export function adminRouter(
     const name = typeof req.body?.name === "string" ? req.body.name : "";
     try {
       const created = await registry.create(name);
-      await onCreated(created.name);
+      try {
+        await onCreated(created.name);
+      } catch (err) {
+        // The key has not been handed out yet, so a profile left behind here
+        // could never be used and would block a retry under the same name.
+        // Revoke it; any existing bundle directory is left untouched.
+        await registry.remove(created.name).catch(() => {});
+        const reason = (err as Error).message;
+        console.error(`[understory] profile "${created.name}" was not created: ${reason}`);
+        res.status(500).json({ error: `profile was not created: ${reason}` });
+        return;
+      }
       // The key is returned exactly once; only its hash is stored.
       res.status(201).json(created);
     } catch (err) {

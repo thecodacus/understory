@@ -30,7 +30,7 @@ export function bearerAuth(token: string) {
     res
       .status(401)
       .set("WWW-Authenticate", 'Bearer realm="understory"')
-      .json({ error: "unauthorized: set Authorization: Bearer <AUTH_TOKEN>" });
+      .json({ error: "unauthorized: set Authorization: Bearer <AUTH_TOKEN>", mode: "single" });
   };
 }
 

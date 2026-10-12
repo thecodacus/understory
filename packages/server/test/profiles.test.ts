@@ -115,6 +115,51 @@ describe("ProfileRegistry", () => {
     expect(await registry.resolve(key)).toBeNull();
   });
 
+  it("keeps every change when many mutations run at once in one process", async () => {
+    const names = Array.from({ length: 12 }, (_, i) => `p${i}`);
+    const created = await Promise.all(names.map((n) => registry.create(n)));
+    expect((await registry.list()).map((p) => p.name).sort()).toEqual([...names].sort());
+    for (const { name, key } of created) {
+      expect((await registry.resolve(key))?.name).toBe(name);
+    }
+  });
+
+  it("lets exactly one of two simultaneous creates for the same name win", async () => {
+    const results = await Promise.allSettled([registry.create("dup"), registry.create("dup")]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: "EXISTS" });
+    expect((await registry.list()).filter((p) => p.name === "dup")).toHaveLength(1);
+  });
+
+  it("keeps every change when two processes mutate at once", async () => {
+    // Two registries on one directory stand in for the server and the CLI.
+    const a = new ProfileRegistry(root);
+    const b = new ProfileRegistry(root);
+    await Promise.all(Array.from({ length: 8 }, (_, i) => [a.create(`a${i}`), b.create(`b${i}`)]).flat());
+    expect(await new ProfileRegistry(root).list()).toHaveLength(16);
+  });
+
+  it("never undoes a revocation because another process wrote at the same moment", async () => {
+    const a = new ProfileRegistry(root);
+    const b = new ProfileRegistry(root);
+    const { key } = await a.create("victim");
+    await b.list(); // b now holds a copy of the registry that includes "victim"
+    await Promise.all([a.remove("victim"), b.create("other")]);
+
+    const fresh = new ProfileRegistry(root);
+    expect(await fresh.resolve(key)).toBeNull();
+    expect((await fresh.list()).map((p) => p.name)).toEqual(["other"]);
+  });
+
+  it("recovers from a lock left behind by a crashed process", async () => {
+    const lock = path.join(root, "profiles.json.lock");
+    await fs.writeFile(lock, "crashed");
+    const longAgo = new Date(Date.now() - 5 * 60_000);
+    await fs.utimes(lock, longAgo, longAgo);
+    await expect(registry.create("after-crash")).resolves.toMatchObject({ name: "after-crash" });
+  });
+
   it("fails closed when the registry file is corrupt", async () => {
     const { key } = await registry.create("work");
     await fs.writeFile(path.join(root, "profiles.json"), "{ not json");
@@ -157,7 +202,10 @@ describe("HTTP isolation between profiles", () => {
   });
 
   it("requires a profile key on /api and /mcp", async () => {
-    expect((await get("/api/tree")).status).toBe(401);
+    const anonymous = await get("/api/tree");
+    expect(anonymous.status).toBe(401);
+    // The 401 tells the UI which kind of key to ask for.
+    expect(await anonymous.json()).toMatchObject({ mode: "profiles" });
     expect((await get("/api/tree", "usk_wrong")).status).toBe(401);
     expect((await get("/api/profile")).status).toBe(401);
     const mcp = await fetch(base + "/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -249,6 +297,41 @@ describe("HTTP isolation between profiles", () => {
   });
 });
 
+describe("admin create when the profile cannot be initialized", () => {
+  let server: Server;
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("rolls the profile back instead of keeping one whose key was never returned", async () => {
+    let healthy = false;
+    const onCreated = async () => {
+      if (!healthy) throw new Error("git autocommit cannot work for this profile");
+    };
+    server = buildApp(profileMemoryHost(registry), { admin: adminRouter(registry, "adm", onCreated) }).listen(0);
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const create = () =>
+      fetch(base + "/admin/profiles", {
+        method: "POST",
+        headers: { Authorization: "Bearer adm", "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "research" }),
+      });
+
+    const failed = await create();
+    expect(failed.status).toBe(500);
+    expect(((await failed.json()) as { error: string }).error).toContain("git autocommit cannot work");
+    expect(await registry.list()).toEqual([]);
+
+    // Once the cause is fixed the same name can be created, and its key works.
+    healthy = true;
+    const ok = await create();
+    expect(ok.status).toBe(201);
+    const { key } = (await ok.json()) as { key: string };
+    expect((await registry.resolve(key))?.name).toBe("research");
+  });
+});
+
 describe("single-memory mode is unchanged", () => {
   let server: Server;
   let base: string;
@@ -273,7 +356,9 @@ describe("single-memory mode is unchanged", () => {
 
   it("requires AUTH_TOKEN when set", async () => {
     await start("s3cret");
-    expect((await fetch(base + "/api/tree")).status).toBe(401);
+    const anonymous = await fetch(base + "/api/tree");
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.json()).toMatchObject({ mode: "single" });
     expect((await fetch(base + "/api/tree", { headers: { Authorization: "Bearer s3cret" } })).status).toBe(200);
   });
 });

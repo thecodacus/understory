@@ -22,7 +22,11 @@ export interface MemoryHost {
 }
 
 function unauthorized(res: Response, message: string): void {
-  res.status(401).set("WWW-Authenticate", 'Bearer realm="understory"').json({ error: message });
+  // `mode` lets the UI ask for the right kind of key.
+  res
+    .status(401)
+    .set("WWW-Authenticate", 'Bearer realm="understory"')
+    .json({ error: message, mode: "profiles" });
 }
 
 /**

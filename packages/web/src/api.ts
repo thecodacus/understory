@@ -102,7 +102,12 @@ export function authHeaders(): Record<string, string> {
 }
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(
+    public readonly status: number,
+    message: string,
+    /** On a 401: whether the server wants a profile key or its single AUTH_TOKEN. */
+    public readonly authMode?: ProfileInfo["mode"]
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -120,7 +125,17 @@ export function apiUrl(path: string): string {
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(apiUrl(url), { headers: authHeaders() });
-  if (!res.ok) throw new ApiError(res.status, `${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    let authMode: ProfileInfo["mode"] | undefined;
+    try {
+      const mode = (JSON.parse(body) as { mode?: unknown }).mode;
+      if (mode === "single" || mode === "profiles") authMode = mode;
+    } catch {
+      // Not JSON: no mode to report.
+    }
+    throw new ApiError(res.status, `${res.status} ${body}`, authMode);
+  }
   return res.json();
 }
 

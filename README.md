@@ -197,11 +197,17 @@ One server can host a separate memory per profile, for example `work`, `health` 
 Turn it on by pointing `PROFILES_ROOT` at a directory (it takes precedence over `BUNDLE_ROOT`):
 
 ```yaml
+services:
+  understory:
+    # ...as in the quick start, plus:
     volumes:
       - understory-profiles:/profiles
     environment:
       PROFILES_ROOT: /profiles
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}   # optional, enables the /admin API
+
+volumes:
+  understory-profiles:
 ```
 
 Manage profiles with the bundled CLI. It works against a running server, which picks up changes on the next request:
