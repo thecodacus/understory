@@ -12,6 +12,10 @@ services:
     environment:
       BUNDLE_ROOT: /bundle
       AUTH_TOKEN: ${AUTH_TOKEN:-}
+      # Profiles (several isolated memories, one API key each): mount a volume
+      # at /profiles and uncomment. See "Profiles" in the README.
+      #PROFILES_ROOT: /profiles
+      #ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       # Primary model
       LLM_API_BASE_URL: ${LLM_API_BASE_URL}
       LLM_API_KEY: ${LLM_API_KEY}

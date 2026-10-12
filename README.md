@@ -12,6 +12,7 @@ Bundles follow the [Open Knowledge Format (OKF) v0.1 spec](https://github.com/Go
 - **Web UI** — browse the bundle (tree, concept viewer, update log, conformance badge), see the memory as an Obsidian-style **force-directed graph** (drag/pan/zoom, colored by type, sized by connections, orphans ringed red, click to open), and chat with the same agent to test it. Tool calls render inline so you can watch it work.
 - **Query-path replay** — every agent run (query/mutation/chat) records its traversal (searches → reads → writes) as a compact notation, persisted under `<bundle>/.traces/`. The graph view lists recent runs; selecting one replays the path as numbered directed hops over the graph — visited concepts ringed, search hits dotted, everything else faded.
 - **CLI** — `pnpm agent:query "..."` / `pnpm agent:mutate "..."` smoke entries.
+- **Profiles** — optionally host several isolated memories on one server, each selected by its own API key. See [Profiles](#profiles-several-isolated-memories-on-one-server).
 
 **Design rule: conformance is enforced in code, not prompts.** The deterministic bundle layer validates frontmatter (`type` required), regenerates `index.md` files, appends `log.md` entries (newest-first, spec §7), and sandboxes all paths to the bundle root. The LLM decides *what* to change; the code guarantees the result is a conformant bundle.
 
@@ -188,6 +189,52 @@ claude mcp add --transport http ustory http://host:3800/mcp \
 ```
 
 The stdio transport needs no token — it's a local process spawned by the client.
+
+### Profiles: several isolated memories on one server
+
+One server can host a separate memory per profile, for example `work`, `health` and a side project. Each profile has its own bundle on disk and its own API key, and the key is the only thing that selects a memory. A request made with the `work` key is served from the `work` bundle and cannot name, read or search any other profile. The URLs stay the same for everyone.
+
+Turn it on by pointing `PROFILES_ROOT` at a directory (it takes precedence over `BUNDLE_ROOT`):
+
+```yaml
+    volumes:
+      - understory-profiles:/profiles
+    environment:
+      PROFILES_ROOT: /profiles
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}   # optional, enables the /admin API
+```
+
+Manage profiles with the bundled CLI. It works against a running server, which picks up changes on the next request:
+
+```bash
+docker compose exec understory node server/dist/profiles-cli.js create work
+# profile: work
+# api key: usk_...        <- shown once; only a hash is stored
+
+docker compose exec understory node server/dist/profiles-cli.js list
+docker compose exec understory node server/dist/profiles-cli.js rotate work          # old key stops working
+docker compose exec understory node server/dist/profiles-cli.js remove work          # revokes the key, keeps the memory
+docker compose exec understory node server/dist/profiles-cli.js remove work --purge  # also deletes the memory
+```
+
+From a source checkout the same commands are `PROFILES_ROOT=... pnpm --filter @understory/server profiles <command>`.
+
+Give each agent its profile's key:
+
+```bash
+claude mcp add --transport http work-memory http://host:3800/mcp \
+  --header "Authorization: Bearer usk_..."
+```
+
+The web UI asks for a key and opens that profile's memory. The sidebar shows which profile you are in, with a `switch` button to enter a different key.
+
+Things worth knowing:
+
+- In profile mode every request needs a profile key. `AUTH_TOKEN` is not used.
+- With `ADMIN_TOKEN` set, `GET/POST /admin/profiles`, `POST /admin/profiles/<name>/rotate` and `DELETE /admin/profiles/<name>[?purge=true]` do what the CLI does. The admin token manages profiles but cannot open any memory, and a profile key cannot reach `/admin`.
+- Layout is `PROFILES_ROOT/<name>/` per bundle plus `PROFILES_ROOT/profiles.json` for the registry. To move an existing bundle into a profile, put it at `PROFILES_ROOT/<name>/` and run `create <name>`, which adopts the directory.
+- The query cache, hot memory, traces, git history and dreaming are all per profile. Dreams run one profile after another.
+- The stdio transport serves one bundle. Point its `BUNDLE_ROOT` at a profile's directory to use that memory locally.
 
 ### Serving under a sub-path
 

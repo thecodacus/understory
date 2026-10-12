@@ -1,6 +1,19 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 
+/** The bearer token a request presented, or "" when there is none. */
+export function bearerToken(req: Request): string {
+  const header = req.headers.authorization ?? "";
+  return header.startsWith("Bearer ") ? header.slice(7) : "";
+}
+
+/** Constant-time comparison of a presented token against the expected one. */
+export function tokenMatches(provided: string, expected: string): boolean {
+  if (!provided) return false;
+  // Hash both sides so timingSafeEqual gets equal-length buffers.
+  return timingSafeEqual(sha256(provided), sha256(expected));
+}
+
 /**
  * Optional bearer-token auth for /mcp and /api (issue #1).
  * AUTH_TOKEN unset → no auth (localhost/homelab default).
@@ -9,12 +22,8 @@ import type { NextFunction, Request, Response } from "express";
  * its API calls. The stdio MCP transport is unaffected (local process).
  */
 export function bearerAuth(token: string) {
-  const expected = sha256(token);
   return (req: Request, res: Response, next: NextFunction): void => {
-    const header = req.headers.authorization ?? "";
-    const provided = header.startsWith("Bearer ") ? header.slice(7) : "";
-    // Hash both sides so timingSafeEqual gets equal-length buffers.
-    if (provided && timingSafeEqual(sha256(provided), expected)) {
+    if (tokenMatches(bearerToken(req), token)) {
       next();
       return;
     }

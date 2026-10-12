@@ -4,7 +4,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "ustory": "./bin/ustory"
+    "ustory": "./bin/ustory",
+    "ustory-profiles": "./dist/profiles-cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -12,7 +13,8 @@
     "start": "node dist/index.js",
     "mcp:stdio": "tsx src/mcp/stdio.ts",
     "test": "pnpm run typecheck:test && vitest run --passWithNoTests",
-    "typecheck:test": "tsc -p tsconfig.test.json"
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "profiles": "tsx src/profiles-cli.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

@@ -72,6 +72,12 @@ export interface QueryTrace extends TraceSummary {
   answer: string;
 }
 
+/** Which memory this session is talking to. `profile` is null when the server hosts a single memory. */
+export interface ProfileInfo {
+  mode: "single" | "profiles";
+  profile: string | null;
+}
+
 export interface AppConfig {
   model: string;
   format: "openai" | "anthropic" | string;
@@ -128,4 +134,5 @@ export const api = {
   traces: () => get<TraceSummary[]>("/api/traces"),
   trace: (id: string) => get<QueryTrace>(`/api/trace?id=${encodeURIComponent(id)}`),
   config: () => get<AppConfig>("/api/config"),
+  profile: () => get<ProfileInfo>("/api/profile"),
 };

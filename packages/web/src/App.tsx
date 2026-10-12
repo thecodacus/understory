@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, setAuthToken, type AppConfig, type Concept, type ConformanceReport, type LogEntry, type SearchHit, type TreeNode } from "./api";
+import { api, ApiError, setAuthToken, type AppConfig, type Concept, type ConformanceReport, type LogEntry, type ProfileInfo, type SearchHit, type TreeNode } from "./api";
 import { Tree } from "./components/Tree";
 import { ConceptView } from "./components/ConceptView";
 import { LogView } from "./components/LogView";
@@ -25,6 +25,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [needsToken, setNeedsToken] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<ProfileInfo | null>(null);
 
   const refresh = useCallback(() => {
     api
@@ -44,7 +46,28 @@ export default function App() {
   useEffect(() => {
     refresh();
     api.config().then(setConfig).catch(() => {});
+    api.profile().then(setProfile).catch(() => {});
   }, [refresh]);
+
+  // Everything on screen belongs to the memory the current key opens, so a
+  // key change always starts from a clean page rather than patching state.
+  const submitKey = useCallback(async (key: string) => {
+    setAuthToken(key);
+    try {
+      await api.profile();
+      window.location.reload();
+    } catch (e) {
+      setAuthToken("");
+      setTokenError(
+        e instanceof ApiError && e.status === 401 ? "That key was not accepted." : `Could not reach the server: ${String(e)}`
+      );
+    }
+  }, []);
+
+  const switchProfile = useCallback(() => {
+    setAuthToken("");
+    window.location.reload();
+  }, []);
 
   useEffect(() => {
     if (view.kind === "concept") {
@@ -85,22 +108,22 @@ export default function App() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            setAuthToken(tokenInput.trim());
-            setTokenInput("");
-            refresh();
-            api.config().then(setConfig).catch(() => {});
+            setTokenError(null);
+            void submitKey(tokenInput.trim());
           }}
           className="w-80 rounded-xl border border-zinc-800 bg-zinc-900/60 p-5"
         >
           <h1 className="text-sm font-bold tracking-wide text-cyan-300">understory 🌱</h1>
           <p className="mt-2 text-sm text-zinc-400">
-            This server requires an access token (its <code className="text-zinc-300">AUTH_TOKEN</code>).
+            This server needs an access key: your profile's API key, or the server's{" "}
+            <code className="text-zinc-300">AUTH_TOKEN</code>. The key decides which memory opens.
           </p>
+          {tokenError && <p className="mt-2 text-sm text-red-400">{tokenError}</p>}
           <input
             type="password"
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
-            placeholder="Access token"
+            placeholder="Access key"
             autoFocus
             className="mt-3 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-cyan-600"
           />
@@ -135,6 +158,21 @@ export default function App() {
               </span>
             )}
           </div>
+          {profile?.profile && (
+            <div className="mt-2 flex items-center gap-2 text-xs">
+              <span className="text-zinc-500">profile</span>
+              <span className="truncate font-medium text-zinc-200" title={profile.profile}>
+                {profile.profile}
+              </span>
+              <button
+                onClick={switchProfile}
+                title="Forget this key and open a different profile"
+                className="ml-auto rounded px-1.5 py-0.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+              >
+                switch
+              </button>
+            </div>
+          )}
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}

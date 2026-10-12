@@ -1,38 +1,79 @@
 import path from "node:path";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import express from "express";
-import cors from "cors";
 import { KnowledgeBase, resolveFallbackConfig, resolveLlmTimeout, resolveModelConfig } from "@understory/core";
-import { mcpRouter } from "./mcp/http.js";
-import { browseRouter } from "./api/browse.js";
-import { chatRouter } from "./api/chat.js";
-import { bearerAuth } from "./auth.js";
+import { adminRouter } from "./admin.js";
+import { buildApp } from "./app.js";
 import { startDreamer } from "./dreamer.js";
+import { profileMemoryHost, singleMemoryHost, type MemoryHost } from "./host.js";
+import { ProfileRegistry } from "./profiles.js";
 
+const gitAutocommit = process.env.GIT_AUTOCOMMIT === "true";
+// PROFILES_ROOT takes precedence: the Docker image always sets BUNDLE_ROOT.
+const profilesRoot = process.env.PROFILES_ROOT;
 const bundleRoot = process.env.BUNDLE_ROOT;
-if (!bundleRoot) {
-  console.error("BUNDLE_ROOT env var is required");
+
+if (!profilesRoot && !bundleRoot) {
+  console.error("BUNDLE_ROOT (one memory) or PROFILES_ROOT (one memory per profile) is required");
   process.exit(1);
 }
 
-const kb = new KnowledgeBase(bundleRoot, {
-  gitAutocommit: process.env.GIT_AUTOCOMMIT === "true",
-});
-
-startDreamer(kb);
-
-if (process.env.GIT_AUTOCOMMIT === "true") {
+/** Autocommit must be able to work before a memory serves requests (issue #21). */
+async function requireGitReady(kb: KnowledgeBase, label: string): Promise<void> {
   const gitReady = await kb.ensureGitReady();
   if (!gitReady.ok) {
-    console.error(`[understory] GIT_AUTOCOMMIT=true but autocommit cannot work: ${gitReady.reason}`);
-    process.exit(1);
+    throw new Error(`GIT_AUTOCOMMIT=true but autocommit cannot work for ${label}: ${gitReady.reason}`);
   }
-  console.log("[understory] git autocommit: enabled (bundle history is being recorded)");
 }
 
+let host: MemoryHost;
+let admin: ReturnType<typeof adminRouter> | undefined;
+let serving: string;
 
-const app = express();
+try {
+  if (profilesRoot) {
+    const registry = new ProfileRegistry(profilesRoot, { gitAutocommit });
+    const existing = await registry.memories();
+    if (gitAutocommit) {
+      for (const { name, kb } of existing) await requireGitReady(kb, `profile "${name}"`);
+    }
+    host = profileMemoryHost(registry);
+    serving = `${existing.length} profile(s) from ${registry.root}`;
+    console.log("[understory] auth: a profile API key is required for /mcp and /api");
+    if (process.env.AUTH_TOKEN) {
+      console.error("[understory] AUTH_TOKEN is ignored in profile mode — each profile has its own key");
+    }
+
+    const adminToken = process.env.ADMIN_TOKEN;
+    if (adminToken) {
+      admin = adminRouter(registry, adminToken, async (name) => {
+        if (!gitAutocommit) return;
+        const created = (await registry.memories()).find((m) => m.name === name);
+        if (created) await requireGitReady(created.kb, `profile "${name}"`);
+      });
+      console.log("[understory] admin: profile management enabled at /admin (ADMIN_TOKEN)");
+    } else {
+      console.log("[understory] admin: /admin disabled (set ADMIN_TOKEN, or manage profiles with the CLI)");
+    }
+  } else {
+    const kb = new KnowledgeBase(bundleRoot!, { gitAutocommit });
+    if (gitAutocommit) await requireGitReady(kb, "the bundle");
+    const authToken = process.env.AUTH_TOKEN;
+    host = singleMemoryHost(kb, authToken);
+    serving = `bundle ${bundleRoot}`;
+    console.log(
+      authToken
+        ? "[understory] auth: bearer token required for /mcp and /api"
+        : "[understory] auth: disabled (set AUTH_TOKEN to protect /mcp and /api)"
+    );
+  }
+} catch (err) {
+  console.error(`[understory] ${(err as Error).message}`);
+  process.exit(1);
+}
+
+if (gitAutocommit) console.log("[understory] git autocommit: enabled (bundle history is being recorded)");
+
+startDreamer(async () => (await host.memories()).map(({ kb, profile }) => ({ kb, label: profile })));
 
 // Validate LLM config at startup — fail fast with a clear error.
 try {
@@ -56,49 +97,10 @@ const llmTimeout = resolveLlmTimeout();
 if (llmTimeout.warning) console.error(`[understory] ${llmTimeout.warning}`);
 console.log(`[understory] llm timeout: ${process.env.LLM_TIMEOUT && llmTimeout.ms != null ? process.env.LLM_TIMEOUT.trim() : "none"}`);
 
-// Reflect the request origin; expose Mcp-Session-Id so browser MCP clients can
-// read it back off the initialize response.
-app.use(
-  cors({
-    origin: true,
-    exposedHeaders: ["Mcp-Session-Id"],
-    allowedHeaders: [
-      "Content-Type",
-      "Accept",
-      "Authorization",
-      "Mcp-Session-Id",
-      "Mcp-Protocol-Version",
-      "Last-Event-ID",
-    ],
-    methods: ["GET", "POST", "DELETE", "OPTIONS"],
-  })
-);
-app.use(express.json({ limit: "4mb" }));
-
-// Optional bearer auth (issue #1): protects the memory (/mcp + /api) when
-// AUTH_TOKEN is set. Static web UI stays open and prompts for the token.
-const authToken = process.env.AUTH_TOKEN;
-if (authToken) {
-  app.use(["/mcp", "/api"], bearerAuth(authToken));
-  console.log("[understory] auth: bearer token required for /mcp and /api");
-} else {
-  console.log("[understory] auth: disabled (set AUTH_TOKEN to protect /mcp and /api)");
-}
-
-app.use("/mcp", mcpRouter(kb));
-app.use("/api", browseRouter(kb));
-app.use("/api", chatRouter(kb));
-
-// Serve the built web UI in production (single container), with SPA fallback.
 const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
-if (existsSync(webDist)) {
-  app.use(express.static(webDist));
-  app.get(/^(?!\/(api|mcp)).*/, (_req, res) => {
-    res.sendFile(path.join(webDist, "index.html"));
-  });
-}
+const app = buildApp(host, { webDist, admin });
 
 const port = Number(process.env.PORT ?? 3800);
 app.listen(port, "0.0.0.0", () => {
-  console.log(`understory serving bundle ${bundleRoot} on :${port} (web + /api + /mcp)`);
+  console.log(`understory serving ${serving} on :${port} (web + /api + /mcp)`);
 });
