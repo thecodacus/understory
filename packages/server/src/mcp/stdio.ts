@@ -48,7 +48,8 @@ if (process.env.GIT_AUTOCOMMIT === "true") {
     console.error(`[understory] GIT_AUTOCOMMIT=true but autocommit cannot work: ${gitReady.reason}`);
     process.exit(1);
   }
-  console.log("[understory] git autocommit: enabled (bundle history is being recorded)");
+  // stderr: stdout is the MCP protocol stream on this transport.
+  console.error("[understory] git autocommit: enabled (bundle history is being recorded)");
 }
 
 const server = await buildMcpServer(kb);
