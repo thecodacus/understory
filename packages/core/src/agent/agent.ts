@@ -10,15 +10,15 @@ import { withFallback } from "../providers/fallback.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { buildReadTools, buildWriteTools, formatTree } from "./tools.js";
 import { TraceRecorder, TraceStore, type TraceUsage } from "./trace.js";
+import { parseDuration } from "../util/duration.js";
 
 const MAX_STEPS = 12;
-const DEFAULT_TIMEOUT_MS = 120_000;
 
 export interface AgentOptions {
   model?: string;
   /** Cancel the model run when the caller disconnects or explicitly aborts. */
   abortSignal?: AbortSignal;
-  /** Total deadline for the model run. Defaults to UNDERSTORY_LLM_TIMEOUT_MS or 120 seconds. */
+  /** Total deadline for the model run. Defaults to LLM_TIMEOUT; no deadline when neither is set. */
   timeoutMs?: number;
 }
 
@@ -100,15 +100,44 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export function modelAbortSignal(options: AgentOptions, env: NodeJS.ProcessEnv = process.env): AbortSignal {
-  const envTimeout = Number(env.UNDERSTORY_LLM_TIMEOUT_MS);
-  const timeoutMs =
-    options.timeoutMs ??
-    (Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : DEFAULT_TIMEOUT_MS);
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  return options.abortSignal
-    ? AbortSignal.any([options.abortSignal, timeoutSignal])
-    : timeoutSignal;
+/**
+ * The configured total deadline for one model run, from LLM_TIMEOUT
+ * ("10m", "2h", ...). There is no deadline unless one is configured: healthy
+ * runs on local hardware routinely take many minutes, so any default would
+ * abort working setups. An unparseable value means no deadline plus a
+ * warning, never a silent fallback.
+ */
+export function resolveLlmTimeout(env: NodeJS.ProcessEnv = process.env): {
+  ms: number | null;
+  warning?: string;
+} {
+  const raw = env.LLM_TIMEOUT;
+  if (raw === undefined || raw.trim() === "") return { ms: null };
+  const ms = parseDuration(raw);
+  if (ms === null || ms <= 0) {
+    return {
+      ms: null,
+      warning: `LLM_TIMEOUT="${raw}" is not a positive duration (use e.g. 300s, 10m, 2h) — no deadline applied`,
+    };
+  }
+  return { ms };
+}
+
+/**
+ * Abort signal for a model run: fires when the caller cancels (always
+ * honored) or when the configured deadline expires (opt-in). Undefined when
+ * neither applies.
+ */
+export function modelAbortSignal(
+  options: AgentOptions,
+  env: NodeJS.ProcessEnv = process.env
+): AbortSignal | undefined {
+  const timeoutMs = options.timeoutMs ?? resolveLlmTimeout(env).ms;
+  const signals: AbortSignal[] = [];
+  if (options.abortSignal) signals.push(options.abortSignal);
+  if (timeoutMs != null) signals.push(AbortSignal.timeout(timeoutMs));
+  if (signals.length === 0) return undefined;
+  return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
 }
 
 /** Sum token usage across the run's steps (issue #15). Undefined when the provider reports none. */
@@ -180,10 +209,11 @@ export async function runMutation(
       stopWhen: stepCountIs(MAX_STEPS),
       temperature: 0.2,
     });
-    if (filesChanged.size === 0) {
-      const message =
-        `Mutation completed without changing any files. Model response: ` +
-        (result.text.trim() || "(empty response)");
+    // A run that wrote nothing AND said nothing is a stalled/flaked model.
+    // Writing nothing while explaining why (knowledge already present,
+    // nothing genuinely related to link) is a legitimate outcome.
+    if (filesChanged.size === 0 && result.text.trim() === "") {
+      const message = "Mutation returned an empty response without changing any files.";
       const trace = recorder.finalize("mutation", instruction, message, "failed", modelChain, sumStepsUsage(result.steps));
       await traceStore(kb).save(trace);
       return { ok: false, status: "failed", error: message };

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
-import { KnowledgeBase, resolveFallbackConfig, resolveModelConfig } from "@understory/core";
+import { KnowledgeBase, resolveFallbackConfig, resolveLlmTimeout, resolveModelConfig } from "@understory/core";
 import { mcpRouter } from "./mcp/http.js";
 import { browseRouter } from "./api/browse.js";
 import { chatRouter } from "./api/chat.js";
@@ -51,6 +51,10 @@ try {
   console.error("[understory] Set LLM_API_BASE_URL + LLM_API_KEY, or configure legacy env vars.");
   process.exit(1);
 }
+
+const llmTimeout = resolveLlmTimeout();
+if (llmTimeout.warning) console.error(`[understory] ${llmTimeout.warning}`);
+console.log(`[understory] llm timeout: ${process.env.LLM_TIMEOUT && llmTimeout.ms != null ? process.env.LLM_TIMEOUT.trim() : "none"}`);
 
 // Reflect the request origin; expose Mcp-Session-Id so browser MCP clients can
 // read it back off the initialize response.
