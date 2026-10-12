@@ -36,6 +36,16 @@ const KIND_COLOR: Record<TraceSummary["kind"], string> = {
 
 const radius = (n: SimNode) => 5 + Math.sqrt(n.links) * 3.5;
 
+/** 3241 → "3.2k" — compact token counts for the traces panel. */
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function usageLabel(usage?: { inputTokens: number; outputTokens: number }): string | null {
+  if (!usage) return null;
+  return `${fmtTokens(usage.inputTokens)}→${fmtTokens(usage.outputTokens)} tok`;
+}
+
 /** The traversal chain: concept visits in step order (reads + writes), deduped consecutively. */
 function traceVisits(trace: QueryTrace): { path: string; seq: number; write: boolean }[] {
   const visits: { path: string; seq: number; write: boolean }[] = [];
@@ -319,7 +329,12 @@ export function GraphView({
                   />
                   <span className="truncate text-zinc-200">{t.input}</span>
                 </div>
-                <div className="mt-0.5 truncate font-mono text-[10px] text-zinc-500">{t.notation}</div>
+                <div className="mt-0.5 flex items-baseline gap-2">
+                  <span className="truncate font-mono text-[10px] text-zinc-500">{t.notation}</span>
+                  {usageLabel(t.usage) && (
+                    <span className="ml-auto shrink-0 font-mono text-[10px] text-zinc-600">{usageLabel(t.usage)}</span>
+                  )}
+                </div>
               </button>
             ))}
           </div>
@@ -337,6 +352,11 @@ export function GraphView({
               {activeTrace.kind}
             </span>
             <span className="truncate text-zinc-200">{activeTrace.input}</span>
+            {usageLabel(activeTrace.usage) && (
+              <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                {usageLabel(activeTrace.usage)}
+              </span>
+            )}
             <button
               onClick={closeTrace}
               className="ml-auto shrink-0 rounded px-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"

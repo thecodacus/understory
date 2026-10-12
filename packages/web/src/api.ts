@@ -64,6 +64,7 @@ export interface TraceSummary {
   durationMs: number;
   notation: string;
   stepCount: number;
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export interface QueryTrace extends TraceSummary {

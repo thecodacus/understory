@@ -53,7 +53,7 @@ export function browseRouter(kb: KnowledgeBase): Router {
     // List view: omit full steps/answers to keep the payload light.
     const all = await traces.list();
     res.json(
-      all.map(({ id, kind, input, startedAt, durationMs, notation, steps }) => ({
+      all.map(({ id, kind, input, startedAt, durationMs, notation, steps, usage }) => ({
         id,
         kind,
         input,
@@ -61,6 +61,7 @@ export function browseRouter(kb: KnowledgeBase): Router {
         durationMs,
         notation,
         stepCount: steps.length,
+        usage,
       }))
     );
   });

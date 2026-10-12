@@ -1,4 +1,4 @@
-import ReactMarkdown from "react-markdown";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import type { LogEntry } from "../api";
 
 const ACTION_STYLES: Record<LogEntry["action"], string> = {
@@ -37,26 +37,12 @@ export function LogView({
                   {e.action}
                 </span>
                 <div className="markdown text-sm [&_p]:my-0">
-                  <ReactMarkdown
-                    components={{
-                      a: ({ href, children }) =>
-                        href?.startsWith("/") && href.endsWith(".md") ? (
-                          <a
-                            href={href}
-                            onClick={(ev) => {
-                              ev.preventDefault();
-                              onNavigate(href);
-                            }}
-                          >
-                            {children}
-                          </a>
-                        ) : (
-                          <a href={href}>{children}</a>
-                        ),
-                    }}
+                  <MarkdownRenderer
+                    onNavigate={(href) => (href.startsWith("/") && href.endsWith(".md") ? href : null)}
+                    onNavigateClick={onNavigate}
                   >
                     {e.summary}
-                  </ReactMarkdown>
+                  </MarkdownRenderer>
                 </div>
               </div>
             </div>

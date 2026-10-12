@@ -8,6 +8,7 @@ import { mcpRouter } from "./mcp/http.js";
 import { browseRouter } from "./api/browse.js";
 import { chatRouter } from "./api/chat.js";
 import { bearerAuth } from "./auth.js";
+import { startDreamer } from "./dreamer.js";
 
 const bundleRoot = process.env.BUNDLE_ROOT;
 if (!bundleRoot) {
@@ -18,6 +19,18 @@ if (!bundleRoot) {
 const kb = new KnowledgeBase(bundleRoot, {
   gitAutocommit: process.env.GIT_AUTOCOMMIT === "true",
 });
+
+startDreamer(kb);
+
+if (process.env.GIT_AUTOCOMMIT === "true") {
+  const gitReady = await kb.ensureGitReady();
+  if (!gitReady.ok) {
+    console.error(`[understory] GIT_AUTOCOMMIT=true but autocommit cannot work: ${gitReady.reason}`);
+    process.exit(1);
+  }
+  console.log("[understory] git autocommit: enabled (bundle history is being recorded)");
+}
+
 
 const app = express();
 
