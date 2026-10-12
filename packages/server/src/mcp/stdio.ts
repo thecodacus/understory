@@ -37,6 +37,16 @@ try {
 const kb = new KnowledgeBase(bundleRoot, {
   gitAutocommit: process.env.GIT_AUTOCOMMIT === "true",
 });
+
+if (process.env.GIT_AUTOCOMMIT === "true") {
+  const gitReady = await kb.ensureGitReady();
+  if (!gitReady.ok) {
+    console.error(`[understory] GIT_AUTOCOMMIT=true but autocommit cannot work: ${gitReady.reason}`);
+    process.exit(1);
+  }
+  console.log("[understory] git autocommit: enabled (bundle history is being recorded)");
+}
+
 const server = await buildMcpServer(kb);
 await server.connect(new StdioServerTransport());
 // stdio transport keeps the process alive; logs must go to stderr only.

@@ -59,11 +59,54 @@ export async function regenerateIndexChain(bundle: Bundle, dir: string): Promise
   let current = bundle.resolve(dir);
   // If given a file path, start from its directory.
   if (current.endsWith(".md")) current = path.dirname(current);
+  // The directory may have been pruned away — start from the nearest ancestor
+  // that still exists (the root always exists).
+  while (current !== bundle.root) {
+    try {
+      await fs.access(current);
+      break;
+    } catch {
+      current = path.dirname(current);
+    }
+  }
   while (true) {
     await regenerateIndex(bundle, bundle.toBundlePath(current));
     if (current === bundle.root) break;
     current = path.dirname(current);
   }
+}
+
+/**
+ * Remove directories whose only content is the auto-generated index.md
+ * (issue #10: agents move/merge concepts and leave undeletable husks —
+ * delete_concept refuses reserved filenames by design, so cleanup must be
+ * deterministic). Bottom-up over the whole bundle; a directory emptied by
+ * pruning its children is pruned too. The root and dot-directories
+ * (.traces etc.) are never touched. Returns removed bundle paths.
+ */
+export async function pruneEmptyDirs(bundle: Bundle): Promise<string[]> {
+  const removed: string[] = [];
+
+  async function visit(absDir: string): Promise<void> {
+    const entries = await fs.readdir(absDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith(".")) {
+        await visit(path.join(absDir, entry.name));
+      }
+    }
+    if (absDir === bundle.root) return;
+    // Re-read: children may have been pruned during the recursion above.
+    const remaining = await fs.readdir(absDir);
+    const onlyIndex =
+      remaining.length === 0 || (remaining.length === 1 && remaining[0] === "index.md");
+    if (onlyIndex) {
+      await fs.rm(absDir, { recursive: true, force: true });
+      removed.push(bundle.toBundlePath(absDir));
+    }
+  }
+
+  await visit(bundle.root);
+  return removed;
 }
 
 function capitalize(s: string): string {
