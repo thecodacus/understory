@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { createHighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 // Async Shiki highlighter using the JavaScript regex engine (no WASM).
 // Per Shiki best practices: use createHighlighterCore + JavaScript engine
@@ -72,6 +73,7 @@ export interface MarkdownRendererProps {
  * - GFM (tables, strikethrough, task lists) via remark-gfm
  * - XSS sanitization via rehype-sanitize
  * - Syntax highlighting via Shiki (used directly in code component, NOT rehypeShiki)
+ * - Mermaid diagrams for ```mermaid blocks (loaded on first use)
  * - Custom table styling
  *
  * Uses createHighlighterCore with the JavaScript regex engine (no WASM)
@@ -173,9 +175,15 @@ export function MarkdownRenderer({ children, className, onNavigate, onNavigateCl
         </code>
       );
     },
-    pre: ({ children }) => (
-      <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 my-3 overflow-x-auto">{children}</pre>
-    ),
+    pre: ({ children }) => {
+      // A ```mermaid block becomes a diagram instead of a code block.
+      if (React.isValidElement<{ className?: string; children?: React.ReactNode }>(children)) {
+        if (/\blanguage-mermaid\b/.test(children.props.className ?? "")) {
+          return <MermaidDiagram code={String(children.props.children).replace(/\n$/, "")} />;
+        }
+      }
+      return <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 my-3 overflow-x-auto">{children}</pre>;
+    },
   };
 
   return (
