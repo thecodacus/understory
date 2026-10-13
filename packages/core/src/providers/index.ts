@@ -1,6 +1,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
+import { llmFetch } from "./transport.js";
 
 type ResolvedLanguageModel = Extract<LanguageModel, { doGenerate: unknown }>;
 
@@ -201,12 +202,13 @@ export async function createModel(cfg: ModelConfig): Promise<ResolvedLanguageMod
 
   switch (cfg.format) {
     case "anthropic":
-      return createAnthropic({ baseURL: cfg.baseURL, apiKey: cfg.apiKey })(model) as ResolvedLanguageModel;
+      return createAnthropic({ baseURL: cfg.baseURL, apiKey: cfg.apiKey, fetch: llmFetch })(model) as ResolvedLanguageModel;
     case "openai":
       return createOpenAICompatible({
         name: "custom",
         baseURL: normalizeV1(cfg.baseURL),
         apiKey: cfg.apiKey,
+        fetch: llmFetch,
       })(model) as ResolvedLanguageModel;
   }
 }

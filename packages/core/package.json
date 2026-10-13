@@ -23,6 +23,7 @@
     "ai": "^5.0.0",
     "gray-matter": "^4.0.3",
     "simple-git": "^3.27.0",
+    "undici": "^6.29.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
