@@ -13,7 +13,8 @@ export interface TraceStep {
   write?: boolean;
 }
 
-export type TraceOutcome = "success" | "partial" | "failed";
+/** "step-limit": the run used its whole step budget and was stopped before it finished. */
+export type TraceOutcome = "success" | "partial" | "failed" | "step-limit";
 
 /** Token accounting for the run (issue #15: context observability). */
 export interface TraceUsage {
@@ -109,6 +110,8 @@ function outcomeMarker(outcome: TraceOutcome): string {
       return "⚠ partial";
     case "failed":
       return "✗";
+    case "step-limit":
+      return "⚠ step limit";
   }
 }
 

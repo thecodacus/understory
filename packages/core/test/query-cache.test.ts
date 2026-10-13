@@ -44,6 +44,16 @@ describe("runQueryCached", () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
+  it("does not cache an answer from a run that hit the step limit", async () => {
+    const runner = vi.fn(
+      async (): Promise<QueryResult> => ({ answer: "ran out of steps", steps: 12, traceId: "t", stepLimited: true })
+    );
+    await runQueryCached(kb, "what is A?", {}, runner);
+    const second = await runQueryCached(kb, "what is A?", {}, runner);
+    expect(second.cached).toBe(false);
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
   it("invalidates when the bundle changes", async () => {
     const runner = fakeRunner("answer");
     await runQueryCached(kb, "what is A?", {}, runner);

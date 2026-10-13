@@ -12,7 +12,7 @@ import { buildReadTools, buildWriteTools, formatTree } from "./tools.js";
 import { TraceRecorder, TraceStore, type TraceUsage } from "./trace.js";
 import { parseDuration } from "../util/duration.js";
 
-const MAX_STEPS = 12;
+const DEFAULT_MAX_STEPS = 12;
 
 export interface AgentOptions {
   model?: string;
@@ -26,6 +26,8 @@ export interface QueryResult {
   answer: string;
   steps: number;
   traceId: string;
+  /** True when the run used every step without reaching an answer; `answer` then says so. */
+  stepLimited?: boolean;
 }
 
 export interface MutationResult {
@@ -124,6 +126,38 @@ export function resolveLlmTimeout(env: NodeJS.ProcessEnv = process.env): {
 }
 
 /**
+ * How many model steps one agent run may take, from AGENT_MAX_STEPS. A step
+ * is one model call plus the tool calls it asks for. An unusable value means
+ * the default plus a warning, never a silent fallback.
+ */
+export function resolveMaxSteps(env: NodeJS.ProcessEnv = process.env): {
+  steps: number;
+  warning?: string;
+} {
+  const raw = env.AGENT_MAX_STEPS;
+  if (raw === undefined || raw.trim() === "") return { steps: DEFAULT_MAX_STEPS };
+  const steps = Number(raw);
+  if (!Number.isInteger(steps) || steps < 1) {
+    return {
+      steps: DEFAULT_MAX_STEPS,
+      warning: `AGENT_MAX_STEPS="${raw}" is not a positive whole number — using ${DEFAULT_MAX_STEPS}`,
+    };
+  }
+  return { steps };
+}
+
+/**
+ * A run that used every step and whose last step still asked for tools was
+ * cut off by the budget. It did not finish, whatever it wrote on the way.
+ */
+function hitStepLimit(
+  result: { steps: ReadonlyArray<unknown>; finishReason: string },
+  maxSteps: number
+): boolean {
+  return result.steps.length >= maxSteps && result.finishReason === "tool-calls";
+}
+
+/**
  * Abort signal for a model run: fires when the caller cancels (always
  * honored) or when the configured deadline expires (opt-in). Undefined when
  * neither applies.
@@ -165,6 +199,7 @@ export async function runQuery(
 ): Promise<QueryResult> {
   const ctx = await promptContext(kb, "query");
   const recorder = new TraceRecorder();
+  const maxSteps = resolveMaxSteps().steps;
   let modelChain: string[] = [];
   try {
     const resolved = await resolveAgentModel(options, "query");
@@ -175,8 +210,14 @@ export async function runQuery(
       system: buildSystemPrompt(ctx),
       prompt: question,
       tools: buildReadTools(kb, recorder),
-      stopWhen: stepCountIs(MAX_STEPS),
+      stopWhen: stepCountIs(maxSteps),
     });
+    if (hitStepLimit(result, maxSteps)) {
+      const answer = `The search used all ${maxSteps} steps without reaching an answer. Raise AGENT_MAX_STEPS to let it look further.`;
+      const trace = recorder.finalize("query", question, answer, "step-limit", modelChain, sumStepsUsage(result.steps));
+      await traceStore(kb).save(trace);
+      return { answer, steps: result.steps.length, traceId: trace.id, stepLimited: true };
+    }
     const trace = recorder.finalize("query", question, result.text, "success", modelChain, sumStepsUsage(result.steps));
     await traceStore(kb).save(trace);
     return { answer: result.text, steps: result.steps.length, traceId: trace.id };
@@ -196,6 +237,7 @@ export async function runMutation(
   const ctx = await promptContext(kb, "mutate");
   const recorder = new TraceRecorder();
   const filesChanged = new Set<string>();
+  const maxSteps = resolveMaxSteps().steps;
   let modelChain: string[] = [];
   try {
     const resolved = await resolveAgentModel(options, "mutate");
@@ -206,9 +248,21 @@ export async function runMutation(
       system: buildSystemPrompt(ctx),
       prompt: instruction,
       tools: { ...buildReadTools(kb, recorder), ...buildWriteTools(kb, filesChanged, recorder) },
-      stopWhen: stepCountIs(MAX_STEPS),
+      stopWhen: stepCountIs(maxSteps),
       temperature: 0.2,
     });
+    if (hitStepLimit(result, maxSteps)) {
+      const files = [...filesChanged].sort();
+      const message =
+        `The run used all ${maxSteps} steps and was stopped before it finished` +
+        (files.length > 0 ? "; the files it changed may be incomplete" : " or changed any file") +
+        `. Raise AGENT_MAX_STEPS to give it more room.`;
+      const trace = recorder.finalize("mutation", instruction, message, "step-limit", modelChain, sumStepsUsage(result.steps));
+      await traceStore(kb).save(trace);
+      return files.length > 0
+        ? { ok: false, status: "partial", filesChanged: files, error: message, traceId: trace.id }
+        : { ok: false, status: "failed", error: message };
+    }
     // A run that wrote nothing AND said nothing is a stalled/flaked model.
     // Writing nothing while explaining why (knowledge already present,
     // nothing genuinely related to link) is a legitimate outcome.
@@ -253,6 +307,7 @@ export async function streamChat(
   const ctx = await promptContext(kb, "chat");
   const recorder = new TraceRecorder();
   const filesChanged = new Set<string>();
+  const maxSteps = resolveMaxSteps().steps;
   let modelChain: string[] = [];
   // The user turn that started this run, for the trace record.
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
@@ -273,15 +328,16 @@ export async function streamChat(
       system: buildSystemPrompt(ctx),
       messages,
       tools: { ...buildReadTools(kb, recorder), ...buildWriteTools(kb, filesChanged, recorder) },
-      stopWhen: stepCountIs(MAX_STEPS),
-      onFinish: async ({ text, totalUsage }) => {
+      stopWhen: stepCountIs(maxSteps),
+      onFinish: async ({ text, totalUsage, steps, finishReason }) => {
         // Persist only turns that actually touched the bundle.
         if (recorder.steps.length > 0) {
           const usage =
             totalUsage && (totalUsage.inputTokens != null || totalUsage.outputTokens != null)
               ? { inputTokens: totalUsage.inputTokens ?? 0, outputTokens: totalUsage.outputTokens ?? 0 }
               : undefined;
-          await traceStore(kb).save(recorder.finalize("chat", input, text, "success", modelChain, usage));
+          const outcome = hitStepLimit({ steps, finishReason }, maxSteps) ? "step-limit" : "success";
+          await traceStore(kb).save(recorder.finalize("chat", input, text, outcome, modelChain, usage));
         }
       },
     });
