@@ -16,7 +16,16 @@ export function chatRouter(kb: KnowledgeBase): Router {
 
   router.post("/chat", async (req, res) => {
     const { messages, model } = req.body as ChatBody;
-    const { result } = await streamChat(kb, convertToModelMessages(messages), { model });
+    // The browser stops listening when the user presses Stop, closes the tab
+    // or loses the connection. Stop the model with it.
+    const requestAbort = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) requestAbort.abort();
+    });
+    const { result } = await streamChat(kb, convertToModelMessages(messages), {
+      model,
+      abortSignal: requestAbort.signal,
+    });
     const response = result.toUIMessageStreamResponse();
     res.status(response.status);
     response.headers.forEach((value, key) => res.setHeader(key, value));

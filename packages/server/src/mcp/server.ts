@@ -22,6 +22,12 @@ export async function buildMcpServer(kb: KnowledgeBase, abortSignal?: AbortSigna
     return "(memory overview unavailable — the bundle may be empty or unreadable; memory_status can diagnose)";
   });
 
+  // A call ends early when its HTTP request closes (abortSignal) or when the
+  // client sends a cancel notification for it (the signal the SDK hands each
+  // handler, which is the only one a stdio session has).
+  const cancelOn = (callSignal: AbortSignal) =>
+    abortSignal ? AbortSignal.any([abortSignal, callSignal]) : callSignal;
+
   const queryDescription = (s: string) =>
     `Ask a natural-language question. An internal agent searches the OKF knowledge base, ` +
     `reads relevant concepts, and answers with cited bundle paths.\n\n` +
@@ -39,8 +45,8 @@ export async function buildMcpServer(kb: KnowledgeBase, abortSignal?: AbortSigna
       description: queryDescription(seed),
       inputSchema: { question: z.string().describe("The question to answer") },
     },
-    async ({ question }) => {
-      const { answer, source } = await runQueryCached(kb, question, { abortSignal });
+    async ({ question }, extra) => {
+      const { answer, source } = await runQueryCached(kb, question, { abortSignal: cancelOn(extra.signal) });
       const marker = source === "cache" ? "\n\n(cached answer)" : source === "hot" ? "\n\n(hot memory)" : "";
       return {
         content: [{ type: "text", text: `${answer}${marker}` }],
@@ -106,7 +112,7 @@ export async function buildMcpServer(kb: KnowledgeBase, abortSignal?: AbortSigna
           .describe('Optional bundle path hint, e.g. "/apis/payments.md"'),
       },
     },
-    async ({ content, suggested_path }) => {
+    async ({ content, suggested_path }, extra) => {
       // Wrap the payload as an explicit directive. Bare content (e.g. a plain
       // fact like "The user's name is Anirban Kar.") otherwise reads as a chat
       // message and the agent replies conversationally instead of persisting it.
@@ -120,7 +126,7 @@ export async function buildMcpServer(kb: KnowledgeBase, abortSignal?: AbortSigna
         `must use the write tools.\n\n` +
         `KNOWLEDGE TO RECORD:\n${content}` +
         (suggested_path ? `\n\nIf it fits, place new content at ${suggested_path}.` : "");
-      const outcome = await runMutation(kb, instruction, { abortSignal });
+      const outcome = await runMutation(kb, instruction, { abortSignal: cancelOn(extra.signal) });
       await refreshSeed();
       return mutationOutcomeResponse(outcome);
     }
@@ -136,8 +142,8 @@ export async function buildMcpServer(kb: KnowledgeBase, abortSignal?: AbortSigna
         instruction: z.string().describe("What to change, in natural language"),
       },
     },
-    async ({ instruction }) => {
-      const outcome = await runMutation(kb, instruction, { abortSignal });
+    async ({ instruction }, extra) => {
+      const outcome = await runMutation(kb, instruction, { abortSignal: cancelOn(extra.signal) });
       await refreshSeed();
       return mutationOutcomeResponse(outcome);
     }
@@ -189,7 +195,7 @@ export async function buildMcpServer(kb: KnowledgeBase, abortSignal?: AbortSigna
         "Health-check and repair the knowledge graph: an internal agent wires orphaned concepts (nothing links to them) into related concepts and fixes broken links. Run periodically to counter drift. No-op when the graph is already healthy.",
       inputSchema: {},
     },
-    async () => {
+    async (_args, extra) => {
       const before = await kb.lint();
       if (before.healthy) {
         return {
@@ -219,7 +225,7 @@ export async function buildMcpServer(kb: KnowledgeBase, abortSignal?: AbortSigna
         `or remove the link if the target is gone.\n${brokenList}\n\n` +
         `Follow the enrich / link-both-ways rules. Read concepts before editing.`;
 
-      const outcome = await runMutation(kb, instruction, { abortSignal });
+      const outcome = await runMutation(kb, instruction, { abortSignal: cancelOn(extra.signal) });
       await refreshSeed();
       if (!outcome.ok) return mutationOutcomeResponse(outcome);
       const { summary, filesChanged } = outcome.result;

@@ -22,7 +22,7 @@ export function ChatPanel({
 }) {
   const [input, setInput] = useState("");
   const [model, setModel] = useState("");
-  const { messages, sendMessage, status } = useChat({
+  const { messages, sendMessage, status, stop } = useChat({
     transport: new DefaultChatTransport({
       api: apiUrl("/api/chat"),
       headers: () => authHeaders(),
@@ -122,14 +122,24 @@ export function ChatPanel({
           sendMessage({ text: input });
           setInput("");
         }}
-        className="border-t border-zinc-800 p-3"
+        className="flex gap-2 border-t border-zinc-800 p-3"
       >
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask or teach the knowledge base…"
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-cyan-600"
+          className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-cyan-600"
         />
+        {busy && (
+          <button
+            type="button"
+            onClick={() => void stop()}
+            title="Stop the agent"
+            className="shrink-0 rounded-lg border border-red-900/70 bg-red-950/40 px-3 py-2 text-sm font-medium text-red-300 hover:bg-red-900/40"
+          >
+            Stop
+          </button>
+        )}
       </form>
     </div>
   );
