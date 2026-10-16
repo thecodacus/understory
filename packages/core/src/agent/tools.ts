@@ -51,7 +51,16 @@ const logSummary = z
     "One past-tense sentence for the update log, with bundle-relative links, e.g. 'Added [Billing API](/apis/billing-api.md).'"
   );
 
+/**
+ * Hits handed to the agent per search. Every hit is re-sent at every later step
+ * of the run, so a wide result set is paid for repeatedly rather than once. The
+ * agent judges relevance from `score` plus `snippet`, so it needs a short ranked
+ * list, not the whole candidate pool. Set AGENT_SEARCH_LIMIT to widen it.
+ */
+const agentSearchLimit = (): number => Number(process.env.AGENT_SEARCH_LIMIT ?? 8) || 8;
+
 export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder) {
+  let layoutCalls = 0;
   return {
     search_knowledge: tool({
       description:
@@ -62,17 +71,31 @@ export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder) {
         tags: z.array(z.string()).optional().describe("Require ALL of these tags"),
       }),
       execute: async ({ query, type, tags }) => {
-        const hits = await kb.search(query, { type, tags });
+        // An empty query with no filters is browse mode: every concept scores the
+        // same and the result is an arbitrary slice of the bundle that looks
+        // exactly like a hit. In a retrieval loop the agent reads that as success
+        // and keeps going, so refuse it and name the two things that help.
+        if (!query.trim() && !type && !tags?.length) {
+          trace?.record("search_knowledge", "", []);
+          return {
+            hits: [],
+            notice:
+              "An empty query with no type or tag filters is not a search — it would return arbitrary concepts, not answers. Search with keywords, or use list_directory to see what exists.",
+          };
+        }
+        const hits = await kb.search(query, { type, tags, limit: agentSearchLimit() });
         trace?.record("search_knowledge", query, hits.map((h) => h.path));
         if (hits.length > 0) return hits;
-        // Keyword miss ≠ knowledge absent. Put the map in the tool result so
-        // the model's next step is to read plausible concepts, not give up.
-        const tree = formatTree(await kb.listTree());
+        // A keyword miss is information about wording, not proof of absence — but
+        // the fix for that is a reworded search, not a full tree dump. The tree
+        // was ~61,000 tokens on a 500-concept bundle, and it rode along in every
+        // later step of the run while the agent was told to read anything
+        // plausible. The layout is already in the system prompt; a miss needs a
+        // nudge, not a second copy of the bundle.
         return {
           hits: [],
           notice:
-            "No keyword matches — but this search is literal, not semantic. The knowledge may exist under different wording. Before concluding it is absent: (1) retry with 1-2 synonyms or broader terms, (2) review the layout below and read_concept ANY concept whose type, name, or description could plausibly relate to the question.",
-          bundle_layout: tree,
+            "No keyword matches — this search is literal, not semantic, so the knowledge may exist under different wording. Retry with 1-2 synonyms or broader terms. If a reworded search also fails, say the knowledge is not covered rather than reading concepts one by one.",
         };
       },
     }),
@@ -91,6 +114,17 @@ export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder) {
       inputSchema: z.object({}),
       execute: async () => {
         trace?.record("list_directory", "", []);
+        layoutCalls++;
+        // The full tree is ~61,000 tokens on a 500-concept bundle and stays in
+        // the transcript for every later step of the run. One look is a
+        // legitimate question; a second one is an orientation habit turning into
+        // a token spiral, and the compact map is already in the instructions.
+        if (layoutCalls > 1) {
+          return {
+            notice:
+              "The layout has already been listed once in this run, and the compact map is in your instructions. Use them, then search with different wording rather than re-listing the bundle.",
+          };
+        }
         return formatTree(await kb.listTree());
       },
     }),
@@ -197,4 +231,40 @@ export function formatTree(node: TreeNode, depth = 0): string {
     }
   }
   return lines.filter(Boolean).join("\n");
+}
+
+/**
+ * Directory-level filing map: where concepts live, how many, and which types are
+ * in use there. The indented full tree costs ~61,000 tokens on a 500-concept
+ * bundle and was re-sent on every step of every run, because prompt context is
+ * re-sent, not streamed once. This carries the decision-relevant part of the map
+ * at a small fraction of the price; list_directory still returns full detail.
+ *
+ * `maxDepth` bounds how deep the map goes. A query only needs to know which
+ * areas exist, so it gets depth 1; a mutation needs the nested map to choose
+ * where to file.
+ */
+export function formatTreeCompact(node: TreeNode, maxDirs = 80, maxDepth = Infinity): string {
+  const count = (n: TreeNode): number =>
+    n.kind === "concept" ? 1 : (n.children ?? []).reduce((a, c) => a + count(c), 0);
+  const typesIn = (n: TreeNode, acc: Set<string> = new Set()): Set<string> => {
+    if (n.kind === "concept" && n.type) acc.add(n.type);
+    for (const c of n.children ?? []) typesIn(c, acc);
+    return acc;
+  };
+  const lines: string[] = [];
+  const walk = (n: TreeNode, prefix: string, depth: number) => {
+    if (depth >= maxDepth) return;
+    for (const c of n.children ?? []) {
+      if (c.kind !== "directory") continue;
+      const p = `${prefix}/${c.name}`;
+      const total = count(c);
+      if (total === 0) continue;
+      const t = [...typesIn(c)].slice(0, 4);
+      lines.push(`${p}/ — ${total} concept${total === 1 ? "" : "s"}${t.length ? ` (${t.join(", ")})` : ""}`);
+      walk(c, p, depth + 1);
+    }
+  };
+  walk(node, "", 0);
+  return lines.slice(0, maxDirs).join("\n");
 }

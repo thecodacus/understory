@@ -13,8 +13,13 @@ export interface TraceStep {
   write?: boolean;
 }
 
-/** "step-limit": the run used its whole step budget and was stopped before it finished. */
-export type TraceOutcome = "success" | "partial" | "failed" | "step-limit";
+/**
+ * "step-limit": the run used its whole step budget and was stopped before it finished.
+ * "step-limit-partial": it hit the budget but still produced an answer from what it had
+ * already retrieved. Counted separately, because that is the difference between a run
+ * that cost tokens and returned nothing and one that cost tokens and returned knowledge.
+ */
+export type TraceOutcome = "success" | "partial" | "failed" | "step-limit" | "step-limit-partial";
 
 /** Token accounting for the run (issue #15: context observability). */
 export interface TraceUsage {
@@ -112,6 +117,8 @@ function outcomeMarker(outcome: TraceOutcome): string {
       return "✗";
     case "step-limit":
       return "⚠ step limit";
+    case "step-limit-partial":
+      return "⚠ step limit (answered from what it had)";
   }
 }
 

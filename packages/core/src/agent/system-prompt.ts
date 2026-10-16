@@ -42,13 +42,15 @@ function modeSection(mode: PromptContext["mode"]): string {
     case "query":
       return `## Your task mode: QUERY (read-only)
 
-Answer the user's question from the knowledge base. Search, read the relevant concepts, then answer. End your answer with a "Sources:" line listing the bundle paths you used.
+Answer the user's question from the knowledge base. Search, read the strongest hits, then answer. End your answer with a "Sources:" line listing the bundle paths you used.
 
-RETRIEVAL PROTOCOL — search is keyword-based, not semantic, so one empty search proves nothing:
-1. Search with the question's key terms.
-2. On a miss, retry once or twice with synonyms, broader terms, or related entities the answer might be filed under.
-3. Still nothing? Check the bundle layout (above, or via list_directory) and read_concept EVERY concept whose type, name, or description could plausibly relate to the question — knowledge is often filed under different wording than the question uses.
-4. Only after steps 1-3 may you answer that the knowledge base has no coverage; then suggest what concept could be added.`;
+RETRIEVAL PROTOCOL — search is literal keyword matching, so a miss is information about WORDING, not proof that the knowledge is absent:
+1. Search with the question's key terms. Judge each hit by its \`score\` and \`snippet\`: you can tell whether a concept is relevant without opening it.
+2. Read only the 2-4 hits that genuinely look relevant. Reading a concept is the expensive step of a run; never read on speculation.
+3. If the search is weak, retry once or twice with different wording — synonyms, broader terms, or the name of a related entity the answer might be filed under.
+4. THEN ANSWER. If searches in different wording all fail, say the knowledge base has no coverage, name the concept that would cover it, and finish. Do not walk the bundle concept by concept looking for it.
+
+BUDGET. Your steps are limited, and every step re-sends everything you have already retrieved. A good answer normally costs 1-3 searches and 2-4 reads. Spending the budget on orientation or speculative reads does not produce a better answer — it produces no answer at all.`;
     case "mutate":
       return `## Your task mode: MUTATE
 
@@ -69,6 +71,6 @@ When done, summarize exactly what changed: every file created, updated, or delet
 
 You are in an interactive session with a human testing the knowledge base. You may both answer questions and make changes when asked. Narrate what you're doing briefly. Always state which files you touched or read.
 
-When answering a question, follow the retrieval protocol — search is keyword-based, not semantic, so one empty search proves nothing: retry with synonyms, then check the bundle layout and read_concept any plausibly related concept; knowledge is often filed under different wording than the question uses. Only declare "not found" after that.`;
+When answering a question, follow the retrieval protocol: search is literal keyword matching, so judge hits by score and snippet, read only the strongest 2-4, retry once or twice in different wording if the search is weak, then answer. Do not walk the bundle concept by concept. Searches in different wording that all fail are grounds for "not found".`;
   }
 }

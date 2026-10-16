@@ -8,7 +8,7 @@ import {
 } from "../providers/index.js";
 import { withFallback } from "../providers/fallback.js";
 import { buildSystemPrompt } from "./system-prompt.js";
-import { buildReadTools, buildWriteTools, formatTree } from "./tools.js";
+import { buildReadTools, buildWriteTools, formatTreeCompact } from "./tools.js";
 import { TraceRecorder, TraceStore, type TraceUsage } from "./trace.js";
 import { parseDuration } from "../util/duration.js";
 
@@ -26,7 +26,13 @@ export interface QueryResult {
   answer: string;
   steps: number;
   traceId: string;
-  /** True when the run used every step without reaching an answer; `answer` then says so. */
+  /**
+   * True when the run used its whole step budget. `answer` is not necessarily an
+   * apology: the final step is tool-free, so a budget-exhausted run answers from
+   * what it already retrieved and the answer may be a usable partial one (recorded
+   * as the "step-limit-partial" trace outcome). Only when it produced nothing does
+   * `answer` say so.
+   */
   stepLimited?: boolean;
 }
 
@@ -49,7 +55,14 @@ interface ResolvedAgentModel {
 
 async function promptContext(kb: KnowledgeBase, mode: "query" | "mutate" | "chat") {
   const [types, tree] = await Promise.all([kb.listTypes(), kb.listTree()]);
-  return { existingTypes: types, treeSummary: formatTree(tree), mode };
+  // Prompt context is re-sent at every step of a run, so the filing map is paid
+  // for once per step rather than once per run: on a 500-concept bundle the
+  // indented tree is ~61,000 tokens and a ten-step run pays for it ten times.
+  // A query files nothing, so it only needs to know which areas exist; a
+  // mutation needs the nested map to choose where to file. list_directory still
+  // returns full detail for anyone who asks for it.
+  const treeSummary = mode === "query" ? formatTreeCompact(tree, 60, 1) : formatTreeCompact(tree);
+  return { existingTypes: types, treeSummary, mode };
 }
 
 async function resolveAgentModel(
@@ -211,10 +224,20 @@ export async function runQuery(
       prompt: question,
       tools: buildReadTools(kb, recorder),
       stopWhen: stepCountIs(maxSteps),
+      // The final step is given no tools. A run that reaches its budget is then
+      // forced to answer from what it has already retrieved, instead of stopping
+      // mid-search while still asking for tools — which meant the whole run's
+      // retrieval was discarded and replaced by an error string.
+      prepareStep: ({ stepNumber }) => (stepNumber >= maxSteps - 1 ? { activeTools: [] } : {}),
     });
     if (hitStepLimit(result, maxSteps)) {
-      const answer = `The search used all ${maxSteps} steps without reaching an answer. Raise AGENT_MAX_STEPS to let it look further.`;
-      const trace = recorder.finalize("query", question, answer, "step-limit", modelChain, sumStepsUsage(result.steps));
+      // Fail soft: keep whatever the run actually wrote on the way. Half an
+      // answer with its sources beats a full-priced run that returns nothing.
+      const partial = result.text?.trim();
+      const answer = partial
+        ? `${partial}\n\n_(Partial answer: the run reached its ${maxSteps}-step budget and was forced to answer from what it had already retrieved. It may be incomplete.)_`
+        : `The search used all ${maxSteps} steps without reaching an answer. Raise AGENT_MAX_STEPS to let it look further.`;
+      const trace = recorder.finalize("query", question, answer, partial ? "step-limit-partial" : "step-limit", modelChain, sumStepsUsage(result.steps));
       await traceStore(kb).save(trace);
       return { answer, steps: result.steps.length, traceId: trace.id, stepLimited: true };
     }
