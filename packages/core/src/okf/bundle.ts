@@ -17,6 +17,8 @@ export class BundleError extends Error {
       | "NOT_FOUND"
       | "INVALID_FRONTMATTER"
       | "NOT_MARKDOWN"
+      | "DUPLICATE_SECTION"
+      | "MULTI_SECTION_CONTENT"
   ) {
     super(message);
     this.name = "BundleError";
@@ -130,6 +132,19 @@ export class Bundle {
       ...frontmatter,
       timestamp: new Date().toISOString(),
     };
+    // Last line of defense: no write may create a body with a duplicated
+    // top-level section.
+    const seenHeadings = new Set<string>();
+    for (const h of topLevelHeadings(body)) {
+      const k = h.toLowerCase();
+      if (seenHeadings.has(k)) {
+        throw new BundleError(
+          `Write rejected: duplicate top-level section "${h}". One canonical section per heading — keep the newest content, merge any unique bullets into it, and retry the write.`,
+          "DUPLICATE_SECTION"
+        );
+      }
+      seenHeadings.add(k);
+    }
     const abs = this.resolve(canonical);
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, serializeDoc(stamped, body), "utf-8");
@@ -289,8 +304,28 @@ export class Bundle {
   }
 }
 
+/**
+ * Top-level (H1) section names in a markdown body, skipping fenced code blocks.
+ * Used to reject writes that duplicate a top-level section.
+ */
+export function topLevelHeadings(body: string): string[] {
+  const names: string[] = [];
+  let inFence = false;
+  for (const line of body.split("\n")) {
+    if (/^\s*(`{3,}|~{3,})/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = line.match(/^#\s+(.*\S)\s*$/);
+    if (m) names.push(m[1].replace(/#+\s*$/, "").trim());
+  }
+  return names;
+}
+
 /** Replace the content under a heading of any level; append a top-level
- * section if absent; throw on ambiguous (multiple) matches. */
+ * section if absent; throw on ambiguous (multiple) matches or if append
+ * payload contains extra top-level sections. */
 export function replaceSection(body: string, heading: string, content: string): string {
   const normalized = heading.replace(/^#+\s*/, "");
   const lines = body.split("\n");
@@ -315,15 +350,26 @@ export function replaceSection(body: string, heading: string, content: string): 
     );
   }
   const start = matches.length ? matches[0] : -1;
-  if (start !== -1) {
-    // Normalize: strip a leading content line that duplicates the target heading
-    const cLines = content.split("\n");
-    const fi = cLines.findIndex((l) => l.trim().length > 0);
-    if (fi >= 0 && /^#{1,6}\s+/.test(cLines[fi]) && headingTitle(cLines[fi]) === normalized) {
-      content = cLines.slice(fi + 1).join("\n");
-    }
+
+  // Normalize: strip a leading content line that duplicates the target heading.
+  // This applies to both branches (found and append) to avoid silently duplicating
+  // the section header when the model re-emits "# Heading" as its first line.
+  const cLines = content.split("\n");
+  const fi = cLines.findIndex((l) => l.trim().length > 0);
+  if (fi >= 0 && /^#{1,6}\s+/.test(cLines[fi]) && headingTitle(cLines[fi]) === normalized) {
+    content = cLines.slice(fi + 1).join("\n");
   }
+
   if (start === -1) {
+    // This call appends exactly ONE section. Multi-section payloads silently
+    // duplicate existing sections (the 2026-09-29 corruption class).
+    const extra = topLevelHeadings(content);
+    if (extra.length > 0) {
+      throw new BundleError(
+        `replace_section: content contains top-level section(s) ${JSON.stringify(extra)} — this call appends only "${normalized}". Pass single-section content, or use replace_body for a multi-section restructure.`,
+        "MULTI_SECTION_CONTENT"
+      );
+    }
     const suffix = body.trim().length > 0 ? "\n\n" : "";
     return `${body.trimEnd()}${suffix}# ${normalized}\n\n${content.trim()}\n`;
   }

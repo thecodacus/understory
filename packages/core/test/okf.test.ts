@@ -8,6 +8,7 @@ import {
   KnowledgeBase,
   parseDoc,
   replaceSection,
+  topLevelHeadings,
   validateBundle,
   regenerateIndex,
   readLog,
@@ -469,5 +470,103 @@ describe("git autocommit readiness (#21)", () => {
     expect(ready.ok).toBe(true);
     const { existsSync } = await import("node:fs");
     expect(existsSync(path.join(root, ".git"))).toBe(false);
+  });
+});
+
+describe("duplicate-section write guards", () => {
+  it("append (missing heading) with content containing another top-level # heading => rejects MULTI_SECTION_CONTENT", async () => {
+    await kb.writeConcept(
+      "/doc.md",
+      { type: "T", title: "Doc" },
+      "intro",
+      "add"
+    );
+    const original = await kb.readConcept("/doc.md");
+    await expect(
+      kb.patchConcept(
+        "/doc.md",
+        { replaceSection: { heading: "Missing", content: "# Foo\n\nbar\n\n# Bar\n\nbaz" } },
+        "try append"
+      )
+    ).rejects.toMatchObject({ code: "MULTI_SECTION_CONTENT" });
+    const current = await kb.readConcept("/doc.md");
+    expect(current.body).toBe(original.body);
+  });
+
+  it("writeConcept with body containing two identical top-level H1s => rejects DUPLICATE_SECTION", async () => {
+    // Case-sensitive duplicate
+    await expect(
+      kb.writeConcept(
+        "/dup.md",
+        { type: "T", title: "Dup" },
+        "# Setup\n\nfirst\n\n# Setup\n\nsecond",
+        "add"
+      )
+    ).rejects.toMatchObject({ code: "DUPLICATE_SECTION" });
+    await expect(fs.access(path.join(root, "dup.md"))).rejects.toThrow();
+  });
+
+  it("writeConcept with case-insensitive duplicate top-level H1 => rejects DUPLICATE_SECTION", async () => {
+    await expect(
+      kb.writeConcept(
+        "/case.md",
+        { type: "T", title: "Case" },
+        "# Setup\n\nfirst\n\n# setup\n\nsecond",
+        "add"
+      )
+    ).rejects.toMatchObject({ code: "DUPLICATE_SECTION" });
+    await expect(fs.access(path.join(root, "case.md"))).rejects.toThrow();
+  });
+
+  it("# line inside fenced code block does NOT trigger either guard", async () => {
+    const fence = "```";
+    const body = `# Title\n\n${fence}bash\n# comment in fence\ncli line\n${fence}\n\nmore body\n`;
+    const written = await kb.writeConcept(
+      "/fence.md",
+      { type: "T", title: "Fence" },
+      body,
+      "add"
+    );
+    expect(written.body).toBe(body);
+    // Replace the Title section entirely with new content that has no real heading
+    const patched = await kb.patchConcept(
+      "/fence.md",
+      { replaceSection: { heading: "Title", content: "just some text\n" } },
+      "patch"
+    );
+    // The fence should be replaced along with the rest of the section
+    expect(patched.body).not.toContain(fence);
+    expect(patched.body).toBe("# Title\n\njust some text\n");
+  });
+
+  it("clean single-section append still works", async () => {
+    await kb.writeConcept(
+      "/clean.md",
+      { type: "T", title: "Clean" },
+      "body",
+      "add"
+    );
+    const out = await kb.patchConcept(
+      "/clean.md",
+      { replaceSection: { heading: "New", content: "content" } },
+      "append"
+    );
+    expect(out.body).toBe("body\n\n# New\n\ncontent\n");
+  });
+
+  it("leading-echo strip: append with first content line re-emitting target heading => no duplicate line", async () => {
+    await kb.writeConcept(
+      "/echo.md",
+      { type: "T", title: "Echo" },
+      "body",
+      "add"
+    );
+    const out = await kb.patchConcept(
+      "/echo.md",
+      { replaceSection: { heading: "New", content: "# New\n\ncontent" } },
+      "append"
+    );
+    expect(out.body).toBe("body\n\n# New\n\ncontent\n");
+    expect(out.body.split("\n").filter((l) => l.trim() === "# New").length).toBe(1);
   });
 });
