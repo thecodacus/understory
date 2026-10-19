@@ -139,6 +139,26 @@ describe("runMutation", () => {
   });
 });
 
+describe("bundle layout prompt context", () => {
+  it("bounds the initial layout for large bundles and directs the agent to list_directory", async () => {
+    const concepts = Array.from({ length: 500 }, (_, i) =>
+      fs.writeFile(
+        path.join(root, `concept-${i}.md`),
+        `---\ntype: Fact\ntitle: Concept ${i}\ndescription: ${"x".repeat(100)}\n---\nBody.\n`
+      )
+    );
+    await Promise.all(concepts);
+    generateText.mockResolvedValue({ text: "Found it.", steps: [] });
+
+    await runQuery(new KnowledgeBase(root), "What is known?");
+
+    const system = generateText.mock.calls[0][0].system as string;
+    const layout = system.match(/## Current bundle layout\n\n([\s\S]*?)\n\n## Your task mode/)?.[1];
+    expect(layout).toContain("bundle layout truncated; use list_directory for the full tree");
+    expect(Array.from(layout!)).toHaveLength(24_000);
+  });
+});
+
 describe("resolveMaxSteps", () => {
   it("defaults to 12 steps", () => {
     expect(resolveMaxSteps({})).toEqual({ steps: 12 });

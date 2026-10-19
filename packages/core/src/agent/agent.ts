@@ -13,6 +13,9 @@ import { TraceRecorder, TraceStore, type TraceUsage } from "./trace.js";
 import { parseDuration } from "../util/duration.js";
 
 const DEFAULT_MAX_STEPS = 12;
+const MAX_TREE_SUMMARY_CHARS = 24_000;
+const TREE_SUMMARY_TRUNCATION_NOTICE =
+  "\n... (bundle layout truncated; use list_directory for the full tree)";
 
 export interface AgentOptions {
   model?: string;
@@ -49,7 +52,14 @@ interface ResolvedAgentModel {
 
 async function promptContext(kb: KnowledgeBase, mode: "query" | "mutate" | "chat") {
   const [types, tree] = await Promise.all([kb.listTypes(), kb.listTree()]);
-  return { existingTypes: types, treeSummary: formatTree(tree), mode };
+  const fullTree = formatTree(tree);
+  const treeChars = Array.from(fullTree);
+  const treeSummary =
+    treeChars.length <= MAX_TREE_SUMMARY_CHARS
+      ? fullTree
+      : treeChars.slice(0, MAX_TREE_SUMMARY_CHARS - Array.from(TREE_SUMMARY_TRUNCATION_NOTICE).length).join("") +
+        TREE_SUMMARY_TRUNCATION_NOTICE;
+  return { existingTypes: types, treeSummary, mode };
 }
 
 async function resolveAgentModel(
