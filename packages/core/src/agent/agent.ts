@@ -13,6 +13,45 @@ import { TraceRecorder, TraceStore, type TraceUsage } from "./trace.js";
 import { parseDuration } from "../util/duration.js";
 
 const DEFAULT_MAX_STEPS = 12;
+const DEFAULT_MUTATION_WRITE_RESERVE = 3;
+const MIN_EXPLORATION_STEPS = 2;
+const WRITE_TOOLS: Array<"write_concept" | "patch_concept" | "delete_concept"> = [
+  "write_concept",
+  "patch_concept",
+  "delete_concept",
+];
+
+export function resolveMutationWriteReserve(
+  env: NodeJS.ProcessEnv = process.env,
+  maxSteps = resolveMaxSteps(env).steps
+): { reserve: number; warning?: string } {
+  const raw = env.AGENT_MUTATION_WRITE_RESERVE;
+  const fallback = Math.max(0, maxSteps - MIN_EXPLORATION_STEPS);
+  if (raw === undefined || raw.trim() === "") {
+    return { reserve: Math.min(DEFAULT_MUTATION_WRITE_RESERVE, fallback) };
+  }
+  const reserve = Number(raw);
+  if (!Number.isInteger(reserve) || reserve < 1) {
+    return {
+      reserve: Math.min(DEFAULT_MUTATION_WRITE_RESERVE, fallback),
+      warning: `AGENT_MUTATION_WRITE_RESERVE="${raw}" is not a positive whole number — using ${Math.min(DEFAULT_MUTATION_WRITE_RESERVE, fallback)}`,
+    };
+  }
+  return { reserve: Math.min(reserve, fallback) };
+}
+
+export function mutationPrepareStep(
+  stepNumber: number,
+  maxSteps: number,
+  reserve: number,
+  hasWritten: boolean,
+  originalSystem: string
+): { system?: string; activeTools?: Array<"write_concept" | "patch_concept" | "delete_concept"> } {
+  const remaining = maxSteps - stepNumber;
+  if (remaining > reserve) return {};
+  const system = `${originalSystem}\n\nWrite phase: ${remaining} step(s) remain. Apply required writes, complete backlink work, or explicitly conclude no change is needed. Do not spend remaining steps exploring.`;
+  return hasWritten ? { system } : { system, activeTools: WRITE_TOOLS };
+}
 
 export interface AgentOptions {
   model?: string;
@@ -238,6 +277,8 @@ export async function runMutation(
   const recorder = new TraceRecorder();
   const filesChanged = new Set<string>();
   const maxSteps = resolveMaxSteps().steps;
+  const writeReserve = resolveMutationWriteReserve(process.env, maxSteps).reserve;
+  const systemPrompt = buildSystemPrompt(ctx);
   let modelChain: string[] = [];
   try {
     const resolved = await resolveAgentModel(options, "mutate");
@@ -245,9 +286,11 @@ export async function runMutation(
     const result = await generateText({
       model: resolved.model,
       abortSignal: modelAbortSignal(options),
-      system: buildSystemPrompt(ctx),
+      system: systemPrompt,
       prompt: instruction,
       tools: { ...buildReadTools(kb, recorder), ...buildWriteTools(kb, filesChanged, recorder) },
+      prepareStep: ({ stepNumber }: { stepNumber: number }) =>
+        mutationPrepareStep(stepNumber, maxSteps, writeReserve, filesChanged.size > 0, systemPrompt),
       stopWhen: stepCountIs(maxSteps),
       temperature: 0.2,
     });

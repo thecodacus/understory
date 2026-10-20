@@ -1,6 +1,13 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { KnowledgeBase, resolveFallbackConfig, resolveLlmTimeout, resolveMaxSteps, resolveModelConfig } from "@understory/core";
+import {
+  KnowledgeBase,
+  resolveFallbackConfig,
+  resolveLlmTimeout,
+  resolveMaxSteps,
+  resolveModelConfig,
+  resolveMutationWriteReserve,
+} from "@understory/core";
 import { adminRouter } from "./admin.js";
 import { buildApp } from "./app.js";
 import { startDreamer } from "./dreamer.js";
@@ -100,6 +107,10 @@ console.log(`[understory] llm timeout: ${process.env.LLM_TIMEOUT && llmTimeout.m
 const maxSteps = resolveMaxSteps();
 if (maxSteps.warning) console.error(`[understory] ${maxSteps.warning}`);
 console.log(`[understory] agent max steps: ${maxSteps.steps}`);
+
+const mutationWriteReserve = resolveMutationWriteReserve(process.env, maxSteps.steps);
+if (mutationWriteReserve.warning) console.error(`[understory] ${mutationWriteReserve.warning}`);
+console.log(`[understory] mutation write reserve: ${mutationWriteReserve.reserve}`);
 
 const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
 const app = buildApp(host, { webDist, admin });

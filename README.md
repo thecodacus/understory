@@ -121,6 +121,8 @@ pnpm monorepo:
 
 Providers are configured through `LLM_API_BASE_URL`, `LLM_API_KEY`, `LLM_API_FORMAT` (`openai` or `anthropic`), and `LLM_MODEL`. Any OpenAI-compatible endpoint (DeepSeek, OpenAI, Groq, OpenRouter, llama.cpp, etc.) works with `LLM_API_FORMAT=openai`; Anthropic-compatible endpoints use `LLM_API_FORMAT=anthropic`. Optional fallback uses the matching `LLM_FALLBACK_*` variables.
 
+`AGENT_MUTATION_WRITE_RESERVE` reserves final mutation steps for writes and backlink completion. Default: `3`. Invalid values use default. Reserve clamps to leave at least two exploration steps. Query and chat runs ignore this setting.
+
 ### llama.cpp
 
 ```bash

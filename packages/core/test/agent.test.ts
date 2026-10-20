@@ -23,7 +23,15 @@ vi.mock("../src/providers/index.js", async (importOriginal) => {
   };
 });
 
-import { modelAbortSignal, resolveLlmTimeout, resolveMaxSteps, runMutation, runQuery } from "../src/agent/agent.js";
+import {
+  modelAbortSignal,
+  mutationPrepareStep,
+  resolveLlmTimeout,
+  resolveMaxSteps,
+  resolveMutationWriteReserve,
+  runMutation,
+  runQuery,
+} from "../src/agent/agent.js";
 import { KnowledgeBase } from "../src/okf/index.js";
 
 let root: string;
@@ -44,6 +52,7 @@ afterEach(async () => {
   delete process.env.LLM_API_FORMAT;
   delete process.env.LLM_MODEL;
   delete process.env.AGENT_MAX_STEPS;
+  delete process.env.AGENT_MUTATION_WRITE_RESERVE;
 });
 
 /** The single trace the run saved under the bundle. */
@@ -139,6 +148,30 @@ describe("runMutation", () => {
   });
 });
 
+describe("mutation write reserve", () => {
+  it("defaults to 3 and preserves two exploration steps", () => {
+    expect(resolveMutationWriteReserve({}, 12)).toEqual({ reserve: 3 });
+    expect(resolveMutationWriteReserve({}, 4)).toEqual({ reserve: 2 });
+  });
+
+  it("parses custom values, clamps, and warns invalid values", () => {
+    expect(resolveMutationWriteReserve({ AGENT_MUTATION_WRITE_RESERVE: "5" }, 12)).toEqual({ reserve: 5 });
+    expect(resolveMutationWriteReserve({ AGENT_MUTATION_WRITE_RESERVE: "99" }, 4)).toEqual({ reserve: 2 });
+    expect(resolveMutationWriteReserve({ AGENT_MUTATION_WRITE_RESERVE: "nope" }, 12).warning).toContain("nope");
+  });
+
+  it("restricts tools before first write and restores them after writing", () => {
+    expect(mutationPrepareStep(9, 12, 3, false, "original mutation system prompt")).toEqual({
+      system: expect.stringContaining("original mutation system prompt"),
+      activeTools: ["write_concept", "patch_concept", "delete_concept"],
+    });
+    expect(mutationPrepareStep(9, 12, 3, true, "original mutation system prompt")).toEqual({
+      system: expect.stringContaining("original mutation system prompt"),
+    });
+    expect(mutationPrepareStep(8, 12, 3, false, "original mutation system prompt")).toEqual({});
+  });
+});
+
 describe("resolveMaxSteps", () => {
   it("defaults to 12 steps", () => {
     expect(resolveMaxSteps({})).toEqual({ steps: 12 });
@@ -226,5 +259,14 @@ describe("step limit (#37)", () => {
     expect(result.stepLimited).toBe(true);
     expect(result.answer).toContain("all 12 steps");
     expect((await savedTrace()).outcome).toBe("step-limit");
+  });
+
+  it("does not apply mutation write preparation to query runs", async () => {
+    generateText.mockResolvedValue({ text: "Answer.", steps: [], finishReason: "stop" });
+    const kb = new KnowledgeBase(root);
+
+    await runQuery(kb, "What do we know?");
+
+    expect(generateText).toHaveBeenCalledWith(expect.not.objectContaining({ prepareStep: expect.anything() }));
   });
 });

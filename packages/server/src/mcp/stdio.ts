@@ -5,7 +5,14 @@
  *     -e LLM_PROVIDER=openrouter -- node <repo>/packages/server/dist/mcp/stdio.js
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { KnowledgeBase, resolveFallbackConfig, resolveLlmTimeout, resolveMaxSteps, resolveModelConfig } from "@understory/core";
+import {
+  KnowledgeBase,
+  resolveFallbackConfig,
+  resolveLlmTimeout,
+  resolveMaxSteps,
+  resolveModelConfig,
+  resolveMutationWriteReserve,
+} from "@understory/core";
 import { buildMcpServer } from "./server.js";
 
 const bundleRoot = process.env.BUNDLE_ROOT;
@@ -41,6 +48,10 @@ console.error(`[understory] llm timeout: ${process.env.LLM_TIMEOUT && llmTimeout
 const maxSteps = resolveMaxSteps();
 if (maxSteps.warning) console.error(`[understory] ${maxSteps.warning}`);
 console.error(`[understory] agent max steps: ${maxSteps.steps}`);
+
+const mutationWriteReserve = resolveMutationWriteReserve(process.env, maxSteps.steps);
+if (mutationWriteReserve.warning) console.error(`[understory] ${mutationWriteReserve.warning}`);
+console.error(`[understory] mutation write reserve: ${mutationWriteReserve.reserve}`);
 
 const kb = new KnowledgeBase(bundleRoot, {
   gitAutocommit: process.env.GIT_AUTOCOMMIT === "true",
