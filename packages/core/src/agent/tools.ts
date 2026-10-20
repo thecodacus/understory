@@ -137,7 +137,7 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
               .string()
               .min(1)
               .describe("Heading name (any level, # through ######), e.g. 'Schema'. Must be non-empty — to replace the whole body use replace_body instead."),
-            content: z.string().describe("New content for that section"),
+            content: z.string().describe("New content for that section — the body of ONE section only; it must not contain other top-level '# ' headings (multi-section changes must use replace_body with the full new body)."),
           })
           .optional(),
         replace_body: z
