@@ -315,6 +315,52 @@ describe("isRetryableError", () => {
     // isRetryable: false should NOT trigger
     expect(isRetryableError({ isRetryable: false, message: "some error" })).toBe(false);
   });
+
+  it("recognizes local LLM context-overflow errors as retryable on the fallback model", () => {
+    expect(
+      isRetryableError(new Error("request (12447 tokens) exceeds the available context size (8192 tokens)"))
+    ).toBe(true);
+    expect(
+      isRetryableError(new Error("This model's maximum context length is 8192 tokens"))
+    ).toBe(true);
+    expect(isRetryableError(new Error("prompt is too long: 70769 tokens > 65536 maximum"))).toBe(
+      true
+    );
+  });
+
+  it("fails over on HTTP 400 context overflow but not on other 400s", () => {
+    const overflow = Object.assign(
+      new Error("request (18226 tokens) exceeds the available context size (16384 tokens)"),
+      { statusCode: 400 }
+    );
+    const badRequest = Object.assign(new Error("invalid request body"), { statusCode: 400 });
+    expect(isRetryableError(overflow)).toBe(true);
+    expect(isRetryableError(badRequest)).toBe(false);
+  });
+
+  it("proactively routes to fallback when estimated prompt tokens exceed maxInputTokens", async () => {
+    let primaryCalled = false;
+    let fallbackCalled = false;
+    const primary = fakeModel({
+      doGenerate: async () => {
+        primaryCalled = true;
+        return { content: [], finishReason: "stop", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, warnings: [] };
+      },
+    });
+    const fallback = fakeModel({
+      doGenerate: async () => {
+        fallbackCalled = true;
+        return { content: [], finishReason: "stop", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, warnings: [] };
+      },
+    });
+
+    const wrapped = withFallback(primary, fallback, { maxInputTokens: 50 });
+    const longPrompt = [{ role: "user", content: [{ type: "text", text: "x".repeat(400) }] }];
+    await wrapped.doGenerate({ prompt: longPrompt } as never);
+
+    expect(primaryCalled).toBe(false);
+    expect(fallbackCalled).toBe(true);
+  });
 });
 
 // ── Helpers ─────────────────────────────────────────────────────────

@@ -52,16 +52,26 @@ async function promptContext(kb: KnowledgeBase, mode: "query" | "mutate" | "chat
   return { existingTypes: types, treeSummary: formatTree(tree), mode };
 }
 
+export function cleanModelText(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>\s*/gi, "")
+    .replace(/^[\s\S]*?<\/think>\s*/i, "")
+    .replace(/<think>[\s\S]*$/i, "")
+    .trim();
+}
+
 async function resolveAgentModel(
   options: AgentOptions,
   mode: "query" | "mutate" | "chat",
   env: NodeJS.ProcessEnv = process.env
 ): Promise<ResolvedAgentModel> {
-  const primaryConfig = withModelOverride(resolveModelConfig(env), options.model);
+  const modeModel =
+    options.model ??
+    (mode === "mutate" ? env.LLM_MUTATE_MODEL : mode === "query" ? env.LLM_QUERY_MODEL : undefined);
+  const primaryConfig = withModelOverride(resolveModelConfig(env), modeModel);
   const primary = await createModel(primaryConfig);
   const fallbackConfig = resolveFallbackConfig(env);
-
-  if (!fallbackConfig) {
+  if (!fallbackConfig || (fallbackConfig.model === primaryConfig.model && fallbackConfig.baseURL === primaryConfig.baseURL)) {
     return { model: primary, modelChain: [modelLabel(primaryConfig)] };
   }
 
@@ -71,9 +81,12 @@ async function resolveAgentModel(
   }
 
   const fallback = await createModel(fallbackConfig);
+  const rawMax = Number(env.LLM_FALLBACK_MAX_INPUT_TOKENS);
+  const maxInputTokens = Number.isFinite(rawMax) && rawMax > 0 ? Math.floor(rawMax) : undefined;
   return {
     model: withFallback(primary, fallback, {
       retry429: env.LLM_FALLBACK_RETRY_429 === "true",
+      maxInputTokens,
     }),
     modelChain: [modelLabel(primaryConfig), modelLabel(fallbackConfig)],
   };
@@ -218,9 +231,10 @@ export async function runQuery(
       await traceStore(kb).save(trace);
       return { answer, steps: result.steps.length, traceId: trace.id, stepLimited: true };
     }
-    const trace = recorder.finalize("query", question, result.text, "success", modelChain, sumStepsUsage(result.steps));
+    const cleanedText = cleanModelText(result.text);
+    const trace = recorder.finalize("query", question, cleanedText, "success", modelChain, sumStepsUsage(result.steps));
     await traceStore(kb).save(trace);
-    return { answer: result.text, steps: result.steps.length, traceId: trace.id };
+    return { answer: cleanedText, steps: result.steps.length, traceId: trace.id };
   } catch (err) {
     const trace = recorder.finalize("query", question, errorMessage(err), "failed", modelChain);
     await traceStore(kb).save(trace);
@@ -266,18 +280,19 @@ export async function runMutation(
     // A run that wrote nothing AND said nothing is a stalled/flaked model.
     // Writing nothing while explaining why (knowledge already present,
     // nothing genuinely related to link) is a legitimate outcome.
-    if (filesChanged.size === 0 && result.text.trim() === "") {
+    const cleanedText = cleanModelText(result.text);
+    if (filesChanged.size === 0 && cleanedText === "") {
       const message = "Mutation returned an empty response without changing any files.";
       const trace = recorder.finalize("mutation", instruction, message, "failed", modelChain, sumStepsUsage(result.steps));
       await traceStore(kb).save(trace);
       return { ok: false, status: "failed", error: message };
     }
-    const trace = recorder.finalize("mutation", instruction, result.text, "success", modelChain, sumStepsUsage(result.steps));
+    const trace = recorder.finalize("mutation", instruction, cleanedText, "success", modelChain, sumStepsUsage(result.steps));
     await traceStore(kb).save(trace);
     return {
       ok: true,
       result: {
-        summary: result.text,
+        summary: cleanedText,
         filesChanged: [...filesChanged].sort(),
         steps: result.steps.length,
         traceId: trace.id,

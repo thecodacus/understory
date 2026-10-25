@@ -25,6 +25,9 @@ export function withFallback(
     model: primary as ResolvedLanguageModel,
     middleware: {
       wrapGenerate: async ({ doGenerate, params }) => {
+        if (opts.maxInputTokens && estimatePromptTokens(params.prompt) > opts.maxInputTokens) {
+          return await fallbackModel.doGenerate(params);
+        }
         try {
           return await doGenerate();
         } catch (err) {
@@ -37,6 +40,9 @@ export function withFallback(
         }
       },
       wrapStream: async ({ doStream, params }) => {
+        if (opts.maxInputTokens && estimatePromptTokens(params.prompt) > opts.maxInputTokens) {
+          return await fallbackModel.doStream(params);
+        }
         try {
           return await doStream();
         } catch (err) {
@@ -64,11 +70,14 @@ export function isRetryableError(err: unknown, retry429?: boolean): boolean {
   if (typeof err === "number") return isRetryableStatusCode(err, retry429);
   if (isAbortError(err)) return false;
 
-  // Check status code first — it is more specific than the generic
-  // isRetryable flag. This ensures {statusCode: 429, isRetryable: true}
-  // still gates on the retry429 opt-in instead of bypassing it.
   const statusCode = getStatusCode(err);
-  if (statusCode != null) return isRetryableStatusCode(statusCode, retry429);
+  if (statusCode != null) {
+    if (statusCode === 400 && isContextOverflowError(err)) return true;
+    return isRetryableStatusCode(statusCode, retry429);
+  }
+
+  // Without an HTTP status, check for context overflow in client/local errors.
+  if (isContextOverflowError(err)) return true;
 
   // AI SDK wraps transport failures in RetryError with isRetryable: true.
   if (getIsRetryable(err)) return true;
@@ -129,11 +138,25 @@ function isTransportCode(code: string): boolean {
   ];
   return codes.includes(code);
 }
-
 function isAbortError(err: unknown): boolean {
-  return !!err && typeof err === "object" && (err as { name?: unknown }).name === "AbortError";
+  return !!err && typeof err === "object" && "name" in err && err.name === "AbortError";
 }
 
+function isContextOverflowError(err: unknown): boolean {
+  const msg = errorMessage(err).toLowerCase();
+  return (
+    msg.includes("exceeds the available context size") ||
+    msg.includes("maximum context length") ||
+    msg.includes("context_length_exceeded") ||
+    msg.includes("prompt is too long")
+  );
+}
+
+export function estimatePromptTokens(prompt: unknown): number {
+  if (!prompt) return 0;
+  const text = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
+  return Math.ceil(text.length / 4);
+}
 function combinedFallbackError(primaryErr: unknown, fallbackErr: unknown): Error {
   const message =
     `Primary and fallback model calls failed. Primary: ${errorMessage(primaryErr)}; ` +

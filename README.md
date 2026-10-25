@@ -132,7 +132,7 @@ LLM_API_BASE_URL=http://inference-box:8080/v1 LLM_API_FORMAT=openai LLM_MODEL= \
 BUNDLE_ROOT=./sample-bundle node packages/server/dist/index.js
 ```
 
-Works behind llama-swap too: discovery prefers the currently **loaded** model so a query doesn't trigger a multi-minute model swap. Pin a specific model with `LLM_MODEL=`.
+Works behind llama-swap too: discovery prefers the currently **loaded** model so a query doesn't trigger a multi-minute model swap. Pin a specific model with `LLM_MODEL=`, or split read and write workloads across two models with `LLM_QUERY_MODEL` and `LLM_MUTATE_MODEL`. When a larger fallback model is configured (`LLM_FALLBACK_*`), steps that exceed `LLM_FALLBACK_MAX_INPUT_TOKENS` or return an HTTP 400 context-length overflow fail over automatically.
 
 ## From source
 

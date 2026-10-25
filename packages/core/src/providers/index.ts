@@ -212,3 +212,4 @@ export async function createModel(cfg: ModelConfig): Promise<ResolvedLanguageMod
       })(model) as ResolvedLanguageModel;
   }
 }
+export * from "./fallback.js";

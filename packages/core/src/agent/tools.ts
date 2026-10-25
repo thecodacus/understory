@@ -82,7 +82,13 @@ export function buildReadTools(kb: KnowledgeBase, trace?: TraceRecorder) {
       execute: async ({ path }) => {
         const c = await kb.readConcept(path);
         trace?.record("read_concept", c.path, [c.path]);
-        return { path: c.path, frontmatter: c.frontmatter, body: c.body };
+        const rawLimit = Number(process.env.AGENT_MAX_READ_CHARS);
+        const maxChars = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 16_000;
+        const body =
+          c.body.length > maxChars
+            ? `${c.body.slice(0, maxChars)}\n\n...[truncated ${c.body.length - maxChars} chars for context safety]`
+            : c.body;
+        return { path: c.path, frontmatter: c.frontmatter, body };
       },
     }),
     list_directory: tool({
@@ -183,18 +189,36 @@ export function buildWriteTools(kb: KnowledgeBase, filesChanged: Set<string>, tr
 }
 
 /** Compact indented listing for prompts and the list_directory tool. */
-export function formatTree(node: TreeNode, depth = 0): string {
+const UUID_NAME = /^[0-9a-f]{8}-/i;
+
+export function formatTree(node: TreeNode, depth = 0, maxLines = 120): string {
   const lines: string[] = [];
-  if (depth === 0) lines.push("/");
-  for (const child of node.children ?? []) {
-    const indent = "  ".repeat(depth + 1);
-    if (child.kind === "directory") {
-      lines.push(`${indent}${child.name}/`);
-      lines.push(formatTree(child, depth + 1));
-    } else if (child.kind === "concept") {
-      const meta = [child.type, child.description].filter(Boolean).join(" — ");
-      lines.push(`${indent}${child.name}${meta ? `  [${meta}]` : ""}`);
+  let omitted = 0;
+  function walk(cur: TreeNode, d: number) {
+    if (d === 0) lines.push("/");
+    const children = [...(cur.children ?? [])].sort((a, b) => {
+      const rank = (x: TreeNode) =>
+        x.kind === "directory" ? 0 : UUID_NAME.test(x.name) ? 2 : 1;
+      return rank(a) - rank(b) || a.name.localeCompare(b.name);
+    });
+    for (const child of children) {
+      if (lines.length >= maxLines) {
+        omitted++;
+        continue;
+      }
+      const indent = "  ".repeat(d + 1);
+      if (child.kind === "directory") {
+        lines.push(`${indent}${child.name}/`);
+        walk(child, d + 1);
+      } else if (child.kind === "concept") {
+        const meta = [child.type, child.description].filter(Boolean).join(" — ");
+        lines.push(`${indent}${child.name}${meta ? `  [${meta}]` : ""}`);
+      }
     }
+  }
+  walk(node, depth);
+  if (omitted > 0) {
+    lines.push(`  ... (${omitted} more entries — use search_knowledge to locate concepts)`);
   }
   return lines.filter(Boolean).join("\n");
 }
